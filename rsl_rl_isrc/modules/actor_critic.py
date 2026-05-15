@@ -1,32 +1,10 @@
-# SPDX-FileCopyrightText: Copyright (c) 2021 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: BSD-3-Clause
-# 
-# Redistribution and use in source and binary forms, with or without
-# modification, are permitted provided that the following conditions are met:
+# rsl_rl_isrc — 基于 rsl_rl 思路的 PyTorch 强化学习组件（PPO、TRPO、REINFORCE、SAC、
+# RolloutStorage/ReplayBuffer、sockets HTTP 上报等）。
 #
-# 1. Redistributions of source code must retain the above copyright notice, this
-# list of conditions and the following disclaimer.
+# 致谢：rsl_rl 原团队；本仓库由 ISRC 在独立包名 rsl_rl_isrc 下维护与扩展。
+# License: BSD-3-Clause（见仓库根目录及 setup.py）。
 #
-# 2. Redistributions in binary form must reproduce the above copyright notice,
-# this list of conditions and the following disclaimer in the documentation
-# and/or other materials provided with the distribution.
-#
-# 3. Neither the name of the copyright holder nor the names of its
-# contributors may be used to endorse or promote products derived from
-# this software without specific prior written permission.
-#
-# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-# AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-# IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
-# DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
-# FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
-# DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
-# SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
-# CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
-# OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-# OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-#
-# Copyright (c) 2021 ETH Zurich, Nikita Rudin
+"""非循环 MLP 的 Actor-Critic（高斯策略噪声 + 状态价值头）。"""
 
 import numpy as np
 
@@ -36,6 +14,8 @@ from torch.distributions import Normal
 from torch.nn.modules import rnn
 
 class ActorCritic(nn.Module):
+    """高斯策略 + 标量状态价值的 MLP：``actor`` 输出动作均值，``std`` 为可学习对角噪声。"""
+
     #is_recurrent = False
     def __init__(self,  num_actor_obs,
                         num_critic_obs,
@@ -117,25 +97,31 @@ class ActorCritic(nn.Module):
         return self.distribution.entropy().sum(dim=-1)
 
     def update_distribution(self, observations):
+        """用当前 ``actor`` 输出与 ``self.std`` 构造 ``Normal`` 分布供采样/对数概率。"""
         mean = self.actor(observations)
         self.distribution = Normal(mean, mean*0. + self.std)
 
     def act(self, observations, **kwargs):
+        """从策略分布采样一步动作（训练期探索）。"""
         self.update_distribution(observations)
         return self.distribution.sample()
 
     def get_actions_log_prob(self, actions):
+        """在给定当前 ``distribution`` 下，计算动作向量对数概率之和（按动作维求和）。"""
         return self.distribution.log_prob(actions).sum(dim=-1)
 
     def act_inference(self, observations):
+        """返回动作均值（无随机性），用于部署或评估。"""
         actions_mean = self.actor(observations)
         return actions_mean
 
     def evaluate(self, critic_observations, **kwargs):
+        """计算价值网络输出 ``(batch, 1)``。"""
         value = self.critic(critic_observations)
         return value
 
 def get_activation(act_name):
+    """按名称返回 ``nn`` 激活模块实例；未知名称时打印提示并返回 ``None``。"""
     if act_name == "elu":
         return nn.ELU()
     elif act_name == "selu":

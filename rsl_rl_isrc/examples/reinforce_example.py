@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 """
+本脚本：REINFORCE 示例配置与训练演示（依赖 ``rsl_rl_isrc`` 包）。
+
 REINFORCE算法使用示例
 基于rsl_rl框架的非监督强化学习实现
 """

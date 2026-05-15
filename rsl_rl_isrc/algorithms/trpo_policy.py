@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 """
+本模块：TRPO 策略外壳（rollout、存储与 ``TRPO`` 优化内核之间的编排）。
+
 真正的TRPO (Trust Region Policy Optimization) 实现
 基于rsl_rl框架，支持连续动作空间
 """

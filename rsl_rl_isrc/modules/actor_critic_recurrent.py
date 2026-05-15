@@ -1,32 +1,10 @@
-# SPDX-FileCopyrightText: Copyright (c) 2021 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: BSD-3-Clause
-# 
-# Redistribution and use in source and binary forms, with or without
-# modification, are permitted provided that the following conditions are met:
+# rsl_rl_isrc — 基于 rsl_rl 思路的 PyTorch 强化学习组件（PPO、TRPO、REINFORCE、SAC、
+# RolloutStorage/ReplayBuffer、sockets HTTP 上报等）。
 #
-# 1. Redistributions of source code must retain the above copyright notice, this
-# list of conditions and the following disclaimer.
+# 致谢：rsl_rl 原团队；本仓库由 ISRC 在独立包名 rsl_rl_isrc 下维护与扩展。
+# License: BSD-3-Clause（见仓库根目录及 setup.py）。
 #
-# 2. Redistributions in binary form must reproduce the above copyright notice,
-# this list of conditions and the following disclaimer in the documentation
-# and/or other materials provided with the distribution.
-#
-# 3. Neither the name of the copyright holder nor the names of its
-# contributors may be used to endorse or promote products derived from
-# this software without specific prior written permission.
-#
-# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-# AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-# IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
-# DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
-# FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
-# DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
-# SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
-# CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
-# OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-# OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-#
-# Copyright (c) 2021 ETH Zurich, Nikita Rudin
+"""带 LSTM/GRU 的 Actor-Critic，用于需序列记忆的决策。"""
 
 import numpy as np
 
@@ -38,6 +16,11 @@ from .actor_critic import ActorCritic, get_activation
 from rsl_rl_isrc.utils import unpad_trajectories
 
 class ActorCriticRecurrent(ActorCritic):
+    """在 MLP 策略/价值头之前插入 Actor/Critic 各自的 RNN，将原始观测编码为固定维隐状态。
+
+    ``act``/``evaluate`` 在训练期需传入 ``masks`` 与上一步 ``hidden_states``；采集期由内部记忆递推。
+    """
+
     #is_recurrent = True
     def __init__(self,  num_actor_obs,
                         num_critic_obs,
@@ -71,29 +54,34 @@ class ActorCriticRecurrent(ActorCritic):
         print(f"Critic RNN: {self.memory_c}")
 
     def reset(self, dones=None):
+        """在回合结束掩码 ``dones`` 处将 RNN 隐状态清零（并行 env 维）。"""
         self.memory_a.reset(dones)
         self.memory_c.reset(dones)
 
     def act(self, observations, masks=None, hidden_states=None):
+        """经 Actor-RNN 编码后调用基类 ``act`` 采样动作；``masks``/``hidden_states`` 用于反传阶段。"""
         input_a = self.memory_a(observations, masks, hidden_states)
         #print(observations.shape)
         return super().act(input_a.squeeze(0))
 
     def act_inference(self, observations):
-        #print(observations.shape)
+        """推理模式：仅 Actor-RNN + 确定性动作均值（无显式采样噪声路径）。"""
         input_a = self.memory_a(observations)
         return super().act_inference(input_a.squeeze(0))
 
     def evaluate(self, critic_observations, masks=None, hidden_states=None):
-
+        """经 Critic-RNN 编码后计算状态价值标量。"""
         input_c = self.memory_c(critic_observations, masks, hidden_states)
         return super().evaluate(input_c.squeeze(0))
     
     def get_hidden_states(self):
+        """返回 (actor_hidden, critic_hidden)，供存储或分布式同步使用。"""
         return self.memory_a.hidden_states, self.memory_c.hidden_states
 
 
 class Memory(torch.nn.Module):
+    """单路 LSTM/GRU：支持 ``forward`` 在「填充轨迹 batch」与「单步推理」两种形状约定下切换。"""
+
     def __init__(self, input_size, type='lstm', num_layers=1, hidden_size=256):
         super().__init__()
         # RNN
@@ -102,6 +90,7 @@ class Memory(torch.nn.Module):
         self.hidden_states = None
     
     def forward(self, input, masks=None, hidden_states=None):
+        """若提供 ``masks`` 则按批训练路径解包轨迹；否则按单步 ``inference`` 递推并写回 ``hidden_states``。"""
         batch_mode = masks is not None
         if batch_mode:
             # batch mode (policy update): need saved hidden states
@@ -118,6 +107,7 @@ class Memory(torch.nn.Module):
         return out
 
     def reset(self, dones=None):
+        """将 ``dones`` 为 True 的并行环境对应的隐状态切片清零。"""
         # When the RNN is an LSTM, self.hidden_states_a is a list with hidden_state and cell_state
         for hidden_state in self.hidden_states:
             hidden_state[..., dones, :] = 0.0

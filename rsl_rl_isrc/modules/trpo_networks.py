@@ -1,32 +1,10 @@
-# SPDX-FileCopyrightText: Copyright (c) 2021 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: BSD-3-Clause
+# rsl_rl_isrc — 基于 rsl_rl 思路的 PyTorch 强化学习组件（PPO、TRPO、REINFORCE、SAC、
+# RolloutStorage/ReplayBuffer、sockets HTTP 上报等）。
 #
-# Redistribution and use in source and binary forms, with or without
-# modification, are permitted provided that the following conditions are met:
+# 致谢：rsl_rl 原团队；本仓库由 ISRC 在独立包名 rsl_rl_isrc 下维护与扩展。
+# License: BSD-3-Clause（见仓库根目录及 setup.py）。
 #
-# 1. Redistributions of source code must retain the above copyright notice, this
-# list of conditions and the following disclaimer.
-#
-# 2. Redistributions in binary form must reproduce the above copyright notice,
-# this list of conditions and the following disclaimer in the documentation
-# and/or other materials provided with the distribution.
-#
-# 3. Neither the name of the copyright holder nor the names of its
-# contributors may be used to endorse or promote products derived from
-# this software without specific prior written permission.
-#
-# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-# AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-# IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
-# DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
-# FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
-# DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
-# SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
-# CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
-# OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-# OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-#
-# Copyright (c) 2021 ETH Zurich, Nikita Rudin
+"""TRPO 专用策略/价值网络及循环版本。"""
 
 import torch
 import torch.nn as nn
@@ -37,7 +15,7 @@ from rsl_rl_isrc.utils import unpad_trajectories
 
 
 class TrpoPolicy(nn.Module):
-    """TRPO策略网络"""
+    """TRPO 策略 MLP：输出动作均值与可学习对数标准差（对角高斯）。"""
     def __init__(self, num_inputs, num_outputs):
         super(TrpoPolicy, self).__init__()
         self.affine1 = nn.Linear(num_inputs, 64)
@@ -65,7 +43,7 @@ class TrpoPolicy(nn.Module):
 
 
 class TrpoValueFunction(nn.Module):
-    """TRPO价值函数网络"""
+    """TRPO 价值 MLP：将观测映射为标量状态价值。"""
     def __init__(self, num_inputs):
         super(TrpoValueFunction, self).__init__()
         self.affine1 = nn.Linear(num_inputs, 256)  # 增加到256维
@@ -102,7 +80,7 @@ class TrpoValueFunction(nn.Module):
 
 
 class TrpoPolicyRecurrent(nn.Module):
-    """带RNN的TRPO策略网络"""
+    """带 LSTM/GRU 的 TRPO 策略：先 ``Memory`` 编码观测序列，再经 MLP 输出高斯参数。"""
     is_recurrent = True
 
     def __init__(self, num_inputs, num_outputs, rnn_type='lstm', rnn_hidden_size=256, rnn_num_layers=1):
@@ -175,7 +153,7 @@ class TrpoPolicyRecurrent(nn.Module):
 
 
 class TrpoValueFunctionRecurrent(nn.Module):
-    """带RNN的TRPO价值函数网络"""
+    """带 LSTM/GRU 的 TRPO 价值网络：RNN 隐状态后接 MLP 输出标量 V(s)。"""
     is_recurrent = True
 
     def __init__(self, num_inputs, rnn_type='lstm', rnn_hidden_size=256, rnn_num_layers=1):

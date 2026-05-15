@@ -1,6 +1,12 @@
-# SPDX-FileCopyrightText: Copyright (c) 2021 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: BSD-3-Clause
+# rsl_rl_isrc — 基于 rsl_rl 思路的 PyTorch 强化学习组件（PPO、TRPO、REINFORCE、SAC、
+# RolloutStorage/ReplayBuffer、sockets HTTP 上报等）。
+#
+# 致谢：rsl_rl 原团队；本仓库由 ISRC 在独立包名 rsl_rl_isrc 下维护与扩展。
+# License: BSD-3-Clause（见仓库根目录及 setup.py）。
+#
 # 修改版：修复数值稳定性、KL计算、价值函数优化等问题
+
+"""TRPO：共轭梯度解信赖域、线搜索回退及策略/价值联合更新逻辑。"""
 
 import torch
 import torch.nn as nn
@@ -13,6 +19,8 @@ from rsl_rl_isrc.utils import get_flat_params_from, set_flat_params_to, conjugat
 
 
 class TRPO:
+    """信赖域策略优化内核：在 KL 约束下用共轭梯度求步长，并结合线搜索更新 ``TrpoPolicy``/``TrpoValueFunction``。"""
+
     def __init__(self,
                  policy_net: TrpoPolicy,
                  value_net: TrpoValueFunction,

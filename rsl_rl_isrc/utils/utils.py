@@ -1,32 +1,10 @@
-# SPDX-FileCopyrightText: Copyright (c) 2021 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: BSD-3-Clause
-# 
-# Redistribution and use in source and binary forms, with or without
-# modification, are permitted provided that the following conditions are met:
+# rsl_rl_isrc — 基于 rsl_rl 思路的 PyTorch 强化学习组件（PPO、TRPO、REINFORCE、SAC、
+# RolloutStorage/ReplayBuffer、sockets HTTP 上报等）。
 #
-# 1. Redistributions of source code must retain the above copyright notice, this
-# list of conditions and the following disclaimer.
+# 致谢：rsl_rl 原团队；本仓库由 ISRC 在独立包名 rsl_rl_isrc 下维护与扩展。
+# License: BSD-3-Clause（见仓库根目录及 setup.py）。
 #
-# 2. Redistributions in binary form must reproduce the above copyright notice,
-# this list of conditions and the following disclaimer in the documentation
-# and/or other materials provided with the distribution.
-#
-# 3. Neither the name of the copyright holder nor the names of its
-# contributors may be used to endorse or promote products derived from
-# this software without specific prior written permission.
-#
-# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-# AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-# IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
-# DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
-# FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
-# DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
-# SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
-# CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
-# OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-# OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-#
-# Copyright (c) 2021 ETH Zurich, Nikita Rudin
+"""轨迹切分/补零、参数向量拉平、共轭梯度与线搜索等通用算子。"""
 
 import math
 import torch
@@ -34,10 +12,12 @@ import numpy as np
 import torch.nn.functional as F
 
 def pad_to_fixed(padded, fixed_len, batch_first=False):
-    """
-    sequences: List[Tensor], 每条 (T_i, feat_dim)
-    fixed_len: 想要的时间步长度
-    return:    Tensor, 形状 (batch, fixed_len, feat_dim) 或 (fixed_len, batch, feat_dim)
+    """在已有 ``pad_sequence`` 结果上再补零/截断到固定时间长度 ``fixed_len``。
+
+    参数:
+        padded: 已对齐 batch 内最长序列的张量。
+        fixed_len: 目标时间维长度。
+        batch_first: True 时形状 ``(B, T, D)``，否则 ``(T, B, D)``。
     """
     # 1. 先常规补齐到 batch 内最长
     #padded = torch.nn.utils.rnn.pad_sequence(sequences, batch_first=batch_first)
@@ -57,21 +37,12 @@ def pad_to_fixed(padded, fixed_len, batch_first=False):
 
 
 def split_and_pad_trajectories(tensor, dones):
-    """ Splits trajectories at done indices. Then concatenates them and padds with zeros up to the length og the longest trajectory.
-    Returns masks corresponding to valid parts of the trajectories
-    Example: 
-        Input: [ [a1, a2, a3, a4 | a5, a6],
-                 [b1, b2 | b3, b4, b5 | b6]
-                ]
+    """在 ``dones`` 处切段并行轨迹，再拼接并用零填充到最长段，并返回有效步掩码。
 
-        Output:[ [a1, a2, a3, a4], | [  [True, True, True, True],
-                 [a5, a6, 0, 0],   |    [True, True, False, False],
-                 [b1, b2, 0, 0],   |    [True, True, False, False],
-                 [b3, b4, b5, 0],  |    [True, True, True, False],
-                 [b6, 0, 0, 0]     |    [True, False, False, False],
-                ]                  | ]    
-            
-    Assumes that the inputy has the following dimension order: [time, number of envs, aditional dimensions]
+    维度约定：``tensor`` 为 ``[时间, 环境数, …]``；与 ``unpad_trajectories`` 互为逆操作。
+
+    返回:
+        (padded_trajectories, trajectory_masks)，后者布尔掩码标出非填充位置。
     """
     dones = dones.clone()
     #print("split_and_pad_trajectories ///dones:", dones.shape)
@@ -99,19 +70,20 @@ def split_and_pad_trajectories(tensor, dones):
     return padded_trajectories, trajectory_masks
 
 def unpad_trajectories(trajectories, masks):
-    """ Does the inverse operation of  split_and_pad_trajectories()
-    """
+    """``split_and_pad_trajectories`` 的逆：按掩码去掉填充并恢复紧凑时间序列形状。"""
     # Need to transpose before and after the masking to have proper reshaping
     return trajectories.transpose(1, 0)[masks.transpose(1, 0)].view(-1, trajectories.shape[0], trajectories.shape[-1]).transpose(1, 0)
 
 
 def normal_entropy(std):
+    """对角高斯 ``N(0, std^2)`` 的熵（按维求和）。"""
     var = std.pow(2)
     entropy = 0.5 + 0.5 * torch.log(2 * var * math.pi)
     return entropy.sum(1, keepdim=True)
 
 
 def normal_log_density(x, mean, log_std, std):
+    """在给定均值/标准差下计算 ``x`` 的对角高斯对数密度（按维求和）。"""
     var = std.pow(2)
     log_density = -(x - mean).pow(2) / (
         2 * var) - 0.5 * math.log(2 * math.pi) - log_std
@@ -119,6 +91,7 @@ def normal_log_density(x, mean, log_std, std):
 
 
 def get_flat_params_from(model):
+    """将 ``model`` 所有参数展平为一维向量（用于 TRPO 等自然策略梯度实现）。"""
     params = []
     for param in model.parameters():
         params.append(param.data.view(-1))
@@ -128,6 +101,7 @@ def get_flat_params_from(model):
 
 
 def set_flat_params_to(model, flat_params):
+    """把一维向量按 ``model`` 各参数形状写回 ``param.data``。"""
     prev_ind = 0
     for param in model.parameters():
         flat_size = int(np.prod(list(param.size())))
@@ -137,6 +111,7 @@ def set_flat_params_to(model, flat_params):
 
 
 def get_flat_grad_from(net, grad_grad=False):
+    """展平网络梯度；``grad_grad=True`` 时取 ``param.grad.grad``（二阶场景）。"""
     grads = []
     for param in net.parameters():
         if grad_grad:
@@ -149,6 +124,7 @@ def get_flat_grad_from(net, grad_grad=False):
 
 
 def conjugate_gradients(Avp, b, nsteps, residual_tol=1e-10):
+    """共轭梯度法解 ``A x = b``，其中 ``Avp(v)`` 返回矩阵向量积 ``A @ v``（TRPO 中求自然梯度方向）。"""
     x = torch.zeros(b.size(), device=b.device, dtype=b.dtype)
     r = b.clone()
     p = b.clone()
@@ -182,7 +158,7 @@ def conjugate_gradients(Avp, b, nsteps, residual_tol=1e-10):
 
 
 def linesearch(model, f, x, fullstep, expected_improve_rate, max_backtracks=10, accept_ratio=.1):
-    """Line search implementation"""
+    """沿 ``fullstep`` 方向回溯线搜索，直到实际改进满足 ``accept_ratio`` 或耗尽步数。"""
     fval = f(True).data
     print("fval before", fval.item())
     for (_n_backtracks, stepfrac) in enumerate(.5**np.arange(max_backtracks)):
@@ -201,7 +177,7 @@ def linesearch(model, f, x, fullstep, expected_improve_rate, max_backtracks=10, 
 
 
 class RunningMeanStd:
-    """Running mean and std for observation normalization"""
+    """滑动均值与方差，用于观测归一化；``__call__`` 返回裁剪后的标准化张量。"""
 
     def __init__(self, shape, epsilon=1e-4, clip=10.):
         self.mean = torch.zeros(shape, dtype=torch.float32)
@@ -211,14 +187,14 @@ class RunningMeanStd:
 
     @torch.no_grad()
     def __call__(self, x, update=True):
-        """Normalize input x using running statistics"""
+        """用滑动统计量归一化 ``x``；``update=False`` 时仅做仿射变换不更新统计。"""
         if update:
             self.update(x)
         return torch.clamp((x - self.mean.to(x.device)) / torch.sqrt(self.var.to(x.device) + 1e-8),
                             -self.clip, self.clip)
 
     def update(self, x):
-        """Update running statistics with batch x"""
+        """用当前 batch 增量更新滑动均值与方差（Welford 风格合并）。"""
         batch_mean = x.mean(dim=0)
         batch_var = x.var(dim=0, unbiased=False)
         batch_count = x.shape[0]

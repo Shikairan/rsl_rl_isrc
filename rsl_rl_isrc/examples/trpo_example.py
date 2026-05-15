@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 """
+本脚本：TRPO 示例配置与训练入口演示（依赖 ``rsl_rl_isrc`` 包）。
+
 TRPO算法使用示例
 基于rsl_rl框架的Trust Region Policy Optimization实现
 """

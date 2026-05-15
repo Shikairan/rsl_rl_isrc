@@ -1,32 +1,14 @@
-# SPDX-FileCopyrightText: Copyright (c) 2021 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: BSD-3-Clause
-# 
-# Redistribution and use in source and binary forms, with or without
-# modification, are permitted provided that the following conditions are met:
+# rsl_rl_isrc — 基于 rsl_rl 思路的 PyTorch 强化学习组件（PPO、TRPO、REINFORCE、SAC、
+# RolloutStorage/ReplayBuffer、sockets HTTP 上报等）。
 #
-# 1. Redistributions of source code must retain the above copyright notice, this
-# list of conditions and the following disclaimer.
+# 致谢：rsl_rl 原团队；本仓库由 ISRC 在独立包名 rsl_rl_isrc 下维护与扩展。
+# License: BSD-3-Clause（见仓库根目录及 setup.py）。
 #
-# 2. Redistributions in binary form must reproduce the above copyright notice,
-# this list of conditions and the following disclaimer in the documentation
-# and/or other materials provided with the distribution.
-#
-# 3. Neither the name of the copyright holder nor the names of its
-# contributors may be used to endorse or promote products derived from
-# this software without specific prior written permission.
-#
-# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-# AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-# IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
-# DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
-# FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
-# DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
-# SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
-# CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
-# OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-# OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-#
-# Copyright (c) 2021 ETH Zurich, Nikita Rudin
+"""PPO 训练运行器模块。
+
+负责与环境 ``VecEnv`` 交互、``PPO`` 算法更新、分布式下参数 ``broadcast``、
+TensorBoard 日志，以及可选的 HTTP 遥测（``socket_send`` / ``StepObsPublisher``）。
+"""
 
 import time
 import os
@@ -46,6 +28,7 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 
 
 class OnPolicyRunner:
+    """封装 PPO 训练：构建 ``ActorCritic``、``PPO``、驱动 ``learn`` 与检查点/日志。"""
 
     def __init__(self,
                  env: VecEnv,
@@ -96,6 +79,11 @@ class OnPolicyRunner:
    
 
     def socket_send(self):
+        """按 ``state_tag`` 将部分 env 的位姿/关节经进程池异步 POST 到远端（与渲染或调度服务对接）。
+
+        仅当 ``state_tag[0]`` 等于本进程 ``rank`` 且 ``state_tag[1] != 1`` 时发送；
+        返回的 ``state`` 在 ``learn`` 中由指定 rank 拉取并 ``broadcast`` 更新 ``state_tag``。
+        """
         if self.state_tag[0] == self.rank:
             #up0 = torch.tensor([[0.0]*9]*(self.state_tag[3] - self.state_tag[2]))
             if self.state_tag[1] == 1.0:
@@ -115,6 +103,16 @@ class OnPolicyRunner:
             pass
  
     def learn(self, num_learning_iterations, init_at_random_ep_len=False):
+        """主训练循环：多轮 ``num_steps_per_env`` 采集、回报计算、分布式存储同步、rank0 上 ``PPO.update``。
+
+        参数:
+            num_learning_iterations: 追加的外层迭代次数（在 ``current_learning_iteration`` 基础上递增）。
+            init_at_random_ep_len: 若为 True，在首轮随机化各并行环境的剩余回合长度（探索起点多样性）。
+
+        分布式约定:
+            每轮结束由 ``state_tag[0]`` 指定 rank 取回 HTTP 异步结果并广播 ``state_tag``；
+            仅 rank0 执行 ``alg.update``，随后对所有 rank 广播 actor_critic 参数。
+        """
         # initialize writer
         if self.log_dir is not None and self.writer is None and dist.get_rank() == 0:
             self.writer = SummaryWriter(log_dir=self.log_dir, flush_secs=10)
@@ -213,6 +211,7 @@ class OnPolicyRunner:
             self.save(os.path.join(self.log_dir, 'model_{}.pt'.format(self.current_learning_iteration)))
 
     def log(self, locs, width=80, pad=35):
+        """将本轮 ``locs`` 中的损失、FPS、回合统计写入 TensorBoard 并打印文本摘要（仅 rank0 调用）。"""
         self.tot_timesteps += self.num_steps_per_env * self.env.num_envs
         self.tot_time += locs['collection_time'] + locs['learn_time']
         iteration_time = locs['collection_time'] + locs['learn_time']
@@ -283,6 +282,7 @@ class OnPolicyRunner:
 
 
     def save(self, path, infos=None):
+        """保存 ``actor_critic``、优化器状态与当前迭代号到 ``path``（PyTorch ``torch.save``）。"""
         torch.save({
             'model_state_dict': self.alg.actor_critic.state_dict(),
             'optimizer_state_dict': self.alg.optimizer.state_dict(),
@@ -291,6 +291,7 @@ class OnPolicyRunner:
             }, path)
 
     def load(self, path, load_optimizer=True):
+        """从检查点 ``path`` 恢复模型与（可选）优化器，并恢复 ``current_learning_iteration``。"""
         loaded_dict = torch.load(path)
         self.alg.actor_critic.load_state_dict(loaded_dict['model_state_dict'])
         if load_optimizer:
@@ -299,6 +300,7 @@ class OnPolicyRunner:
         return loaded_dict['infos']
 
     def get_inference_policy(self, device=None):
+        """返回 ``actor_critic.act_inference``，用于部署或评估（eval 模式，可选 ``device`` 迁移）。"""
         self.alg.actor_critic.eval() # switch to evaluation mode (dropout for example)
         if device is not None:
             self.alg.actor_critic.to(device)

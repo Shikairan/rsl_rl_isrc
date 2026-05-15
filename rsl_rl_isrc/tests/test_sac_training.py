@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
-"""
+"""本测试模块：自动化/冒烟验证 ``rsl_rl_isrc`` 组件（请结合 tests 下 README 运行）。
+
+
 SAC训练测试 - 只有主程序部分
 """
 

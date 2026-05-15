@@ -1,34 +1,12 @@
-# SPDX-FileCopyrightText: Copyright (c) 2021 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: BSD-3-Clause
+# rsl_rl_isrc — 基于 rsl_rl 思路的 PyTorch 强化学习组件（PPO、TRPO、REINFORCE、SAC、
+# RolloutStorage/ReplayBuffer、sockets HTTP 上报等）。
 #
-# Redistribution and use in source and binary forms, with or without
-# modification, are permitted provided that the following conditions are met:
+# 致谢：rsl_rl 原团队；本仓库由 ISRC 在独立包名 rsl_rl_isrc 下维护与扩展。
+# License: BSD-3-Clause（见仓库根目录及 setup.py）。
 #
-# 1. Redistributions of source code must retain the above copyright notice, this
-# list of conditions and the following disclaimer.
-#
-# 2. Redistributions in binary form must reproduce the above copyright notice,
-# this list of conditions and the following disclaimer in the documentation
-# and/or other materials provided with the distribution.
-#
-# 3. Neither the name of the copyright holder nor the names of its
-# contributors may be used to endorse or promote products derived from
-# this software without specific prior written permission.
-#
-# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-# AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-# IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
-# DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
-# FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
-# DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
-# SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
-# CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
-# OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-# OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-#
-# Copyright (c) 2021 ETH Zurich, Nikita Rudin
-
 """
+rsl_rl_isrc 运行器：REINFORCE（蒙特卡洛策略梯度）训练主循环。
+
 REINFORCE (Policy Gradient) Runner
 仿照 on_policy_runner.py，专为 REINFORCE 算法设计的独立训练 runner
 使用 REINFORCEPolicy + RolloutStorage off-policy episodes
@@ -50,7 +28,7 @@ from rsl_rl_isrc.sockets import send_post_request, StepObsPublisher
 
 
 class REINFORCERunner:
-    """REINFORCE 算法训练 Runner"""
+    """封装 REINFORCE：``REINFORCEPolicy``、按 env 写入 ``RolloutStorage`` 及回合结束折扣回报。"""
 
     def __init__(self,
                  env: VecEnv,
@@ -131,6 +109,7 @@ class REINFORCERunner:
             pass
 
     def learn(self, num_learning_iterations, init_at_random_ep_len=False):
+        """REINFORCE 主循环：``act`` 与环境交互、写入 ``RolloutStorage``、分布式同步后更新策略。"""
         if self.log_dir is not None and self.writer is None:
             if not dist.is_initialized() or dist.get_rank() == 0:
                 self.writer = SummaryWriter(log_dir=self.log_dir, flush_secs=10)

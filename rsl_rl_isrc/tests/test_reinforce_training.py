@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
-"""
+"""本测试模块：自动化/冒烟验证 ``rsl_rl_isrc`` 组件（请结合 tests 下 README 运行）。
+
+
 完整的REINFORCE算法训练测试
 基于rsl_rl框架，使用off-policy episodes进行REINFORCE训练
 这是一个headless测试，不依赖图形界面

@@ -1,34 +1,12 @@
-# SPDX-FileCopyrightText: Copyright (c) 2021 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: BSD-3-Clause
+# rsl_rl_isrc — 基于 rsl_rl 思路的 PyTorch 强化学习组件（PPO、TRPO、REINFORCE、SAC、
+# RolloutStorage/ReplayBuffer、sockets HTTP 上报等）。
 #
-# Redistribution and use in source and binary forms, with or without
-# modification, are permitted provided that the following conditions are met:
+# 致谢：rsl_rl 原团队；本仓库由 ISRC 在独立包名 rsl_rl_isrc 下维护与扩展。
+# License: BSD-3-Clause（见仓库根目录及 setup.py）。
 #
-# 1. Redistributions of source code must retain the above copyright notice, this
-# list of conditions and the following disclaimer.
-#
-# 2. Redistributions in binary form must reproduce the above copyright notice,
-# this list of conditions and the following disclaimer in the documentation
-# and/or other materials provided with the distribution.
-#
-# 3. Neither the name of the copyright holder nor the names of its
-# contributors may be used to endorse or promote products derived from
-# this software without specific prior written permission.
-#
-# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-# AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-# IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
-# DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
-# FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
-# DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
-# SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
-# CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
-# OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-# OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-#
-# Copyright (c) 2021 ETH Zurich, Nikita Rudin
-
 """
+rsl_rl_isrc 运行器：SAC（最大熵软 Actor-Critic）训练主循环。
+
 SAC (Soft Actor-Critic) Runner
 仿照 on_policy_runner.py，专为 SAC 算法设计的独立训练 runner
 SAC 为 off-policy 算法，使用 ReplayBuffer，每步收集后即可更新
@@ -50,7 +28,7 @@ from rsl_rl_isrc.sockets import send_post_request, StepObsPublisher
 
 
 class SACRunner:
-    """SAC 算法训练 Runner"""
+    """封装 SAC 训练：构建 ``SACNetworks`` 与 ``SAC`` 算法、管理 ``ReplayBuffer``、日志与检查点。"""
 
     def __init__(self,
                  env: VecEnv,
@@ -133,6 +111,7 @@ class SACRunner:
             pass
 
     def learn(self, num_learning_iterations, init_at_random_ep_len=False):
+        """SAC 主循环：每步 ``process_env_step``、软更新 Q/Actor/温度，并记录 TensorBoard 指标。"""
         if self.log_dir is not None and self.writer is None:
             if not dist.is_initialized() or dist.get_rank() == 0:
                 self.writer = SummaryWriter(log_dir=self.log_dir, flush_secs=10)

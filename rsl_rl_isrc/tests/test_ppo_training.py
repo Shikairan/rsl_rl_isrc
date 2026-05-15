@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
-"""
+"""本测试模块：自动化/冒烟验证 ``rsl_rl_isrc`` 组件（请结合 tests 下 README 运行）。
+
+
 真正的PPO (Proximal Policy Optimization) 训练测试
 基于rsl_rl框架，支持离散动作空间
 使用clip loss而不是TRPO的KL约束

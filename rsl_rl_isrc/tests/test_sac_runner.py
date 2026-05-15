@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
-"""
+"""本测试模块：自动化/冒烟验证 ``rsl_rl_isrc`` 组件（请结合 tests 下 README 运行）。
+
+
 使用 SACRunner 的 SAC 训练测试
 基于 rsl_rl 框架，使用 SAC 算法和正确的 Runner 接口
 """

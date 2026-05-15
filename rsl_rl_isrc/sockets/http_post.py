@@ -1,7 +1,13 @@
-# SPDX-FileCopyrightText: Copyright (c) 2021 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: BSD-3-Clause
+# rsl_rl_isrc — 基于 rsl_rl 思路的 PyTorch 强化学习组件（PPO、TRPO、REINFORCE、SAC、
+# RolloutStorage/ReplayBuffer、sockets HTTP 上报等）。
 #
-# Outbound HTTP POST helpers (no imports from other rsl_rl_isrc subpackages).
+# 致谢：rsl_rl 原团队；本仓库由 ISRC 在独立包名 rsl_rl_isrc 下维护与扩展。
+# License: BSD-3-Clause（见仓库根目录及 setup.py）。
+#
+"""HTTP POST：``send_post_request``（仿真张量）与 ``StepObsPublisher``（按服务端指令切片上报观测）。
+
+不依赖 rsl_rl_isrc 内其它业务子包；分布式下由 ``torch.distributed.broadcast`` 同步路由指令。
+"""
 
 import os
 from typing import Optional
@@ -14,7 +20,10 @@ _DEFAULT_POST_URL = "http://172.17.0.16:18888/post"
 
 
 def send_post_request(data, rank, task):
-    """POST training payload to remote service; returns JSON or {"error": ...}."""
+    """向 ``RSL_RL_ISRC_POST_URL``（或默认 URL）POST 仿真/自定义张量数据。
+
+    请求体含 ``type/data``、``rank``、``task``、``tensor``。成功返回服务端 JSON；异常时返回 ``{"error": ...}``。
+    """
     header = {"Content-Type": "application/json"}
     url = os.environ.get("RSL_RL_ISRC_POST_URL", _DEFAULT_POST_URL)
     data_package = {"type": "data", "rank": rank, "task": task, "tensor": data}
@@ -27,17 +36,14 @@ def send_post_request(data, rank, task):
 
 
 class StepObsPublisher:
-    """POST obs slices after env.step; separate URL/schema from send_post_request.
+    """在 ``env.step`` 之后按指令将观测切片 POST 到 ``RSL_RL_ISRC_OBS_POST_URL``（与 ``send_post_request`` 独立）。
 
-    Instruction tensor (CPU int64, shape (4,)): [sender_rank, aux, env_start, env_end).
-    Default [0, 0, 0, num_envs] — rank 0 sends env rows [0, num_envs).
-
-    Set RSL_RL_ISRC_OBS_POST_URL to enable. Only the sender rank runs HTTP POST; all ranks
-    participate in dist.broadcast when world_size > 1. If server returns the same ``state``
-    as the local instruction, only ``changed=0`` is broadcast (no second tensor broadcast).
+    指令为 CPU ``int64`` 四元组 ``[sender_rank, aux, env_start, env_end)``；默认 ``[0,0,0,num_envs]``。
+    仅 ``sender_rank`` 对应进程发起 HTTP；多卡时先 ``broadcast(changed)``，指令变更时再 ``broadcast(_instr)``。
     """
 
     def __init__(self, rank: int, task: str, num_envs: int):
+        """rank/task 来自训练进程；``num_envs`` 用于默认指令上界与环境切片 clamp。"""
         self._init_rank = int(rank)
         self._task = task
         self._num_envs = max(1, int(num_envs))
@@ -82,6 +88,7 @@ class StepObsPublisher:
         return out
 
     def push(self, obs) -> None:
+        """若未配置 URL 则直接返回。否则由当前 leader rank 切片 ``obs`` 并 POST；全 rank 参与广播同步。"""
         if not self._enabled:
             return
 
@@ -135,5 +142,5 @@ class StepObsPublisher:
                 dist.broadcast(self._instr, src=leader_src)
 
     def close(self) -> None:
-        """No-op; reserved for future cleanup."""
+        """预留接口：当前无额外资源释放逻辑。"""
         pass

@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
-"""
+"""本测试模块：自动化/冒烟验证 ``rsl_rl_isrc`` 组件（请结合 tests 下 README 运行）。
+
+
 使用 OnPolicyRunner 的 PPO 训练测试
 基于 rsl_rl 框架，使用正确的 PPO 类和 Runner 接口
 """

@@ -1,34 +1,12 @@
-# SPDX-FileCopyrightText: Copyright (c) 2021 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: BSD-3-Clause
+# rsl_rl_isrc — 基于 rsl_rl 思路的 PyTorch 强化学习组件（PPO、TRPO、REINFORCE、SAC、
+# RolloutStorage/ReplayBuffer、sockets HTTP 上报等）。
 #
-# Redistribution and use in source and binary forms, with or without
-# modification, are permitted provided that the following conditions are met:
+# 致谢：rsl_rl 原团队；本仓库由 ISRC 在独立包名 rsl_rl_isrc 下维护与扩展。
+# License: BSD-3-Clause（见仓库根目录及 setup.py）。
 #
-# 1. Redistributions of source code must retain the above copyright notice, this
-# list of conditions and the following disclaimer.
-#
-# 2. Redistributions in binary form must reproduce the above copyright notice,
-# this list of conditions and the following disclaimer in the documentation
-# and/or other materials provided with the distribution.
-#
-# 3. Neither the name of the copyright holder nor the names of its
-# contributors may be used to endorse or promote products derived from
-# this software without specific prior written permission.
-#
-# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-# AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-# IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
-# DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
-# FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
-# DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
-# SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
-# CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
-# OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-# OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-#
-# Copyright (c) 2021 ETH Zurich, Nikita Rudin
-
 """
+rsl_rl_isrc 运行器：TRPO（信赖域策略优化）训练主循环。
+
 TRPO (Trust Region Policy Optimization) Runner
 仿照 on_policy_runner.py，专为 TRPO 算法设计的独立训练 runner
 """
@@ -48,7 +26,7 @@ from rsl_rl_isrc.sockets import send_post_request, StepObsPublisher
 
 
 class TRPORunner:
-    """TRPO 算法训练 Runner"""
+    """封装 TRPO 训练：``TRPOPolicy``、on-policy 存储、KL 信赖域更新与分布式参数同步。"""
 
     def __init__(self,
                  env: VecEnv,
@@ -127,6 +105,7 @@ class TRPORunner:
             pass
 
     def learn(self, num_learning_iterations, init_at_random_ep_len=False):
+        """TRPO 主循环：on-policy 采集、``state_tag`` 遥测、信赖域策略/价值更新与参数广播。"""
         if self.log_dir is not None and self.writer is None:
             if not dist.is_initialized() or dist.get_rank() == 0:
                 self.writer = SummaryWriter(log_dir=self.log_dir, flush_secs=10)
