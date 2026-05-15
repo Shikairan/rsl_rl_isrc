@@ -7,7 +7,6 @@ TRPO训练测试 - 只有主程序部分
 
 import torch
 import numpy as np
-import gymnasium as gym
 from tqdm import tqdm
 
 # 确保使用本地 rsl_rl_isrc 版本而不是系统安装的版本
@@ -17,6 +16,8 @@ if project_root not in ['.', '']:
     import sys
     if project_root not in sys.path:
         sys.path.insert(0, project_root)
+
+import rsl_rl_isrc.isrcgym as gym
 
 # 导入 rsl_rl_isrc 模块
 from rsl_rl_isrc.algorithms.trpo_policy import TRPOPolicy

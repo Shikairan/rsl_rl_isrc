@@ -14,13 +14,14 @@ import tempfile
 import os
 import sys
 from tqdm import tqdm
-import gymnasium as gym
 
 # 确保使用本地 rsl_rl_isrc 版本而不是系统安装的版本
 script_dir = os.path.dirname(os.path.abspath(__file__))
 project_root = os.path.dirname(os.path.dirname(script_dir))  # 项目根目录 (含 rsl_rl_isrc 的目录)
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
+
+import rsl_rl_isrc.isrcgym as gym
 
 # 导入 rsl_rl_isrc 模块
 from rsl_rl_isrc.modules import TrpoPolicy, TrpoValueFunction

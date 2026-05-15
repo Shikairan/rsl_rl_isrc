@@ -5,3 +5,11 @@
 # License: BSD-3-Clause（见仓库根目录及 setup.py）。
 #
 """顶层包：算法、运行器、网络与环境抽象均位于子模块，请按需 ``import rsl_rl_isrc.xxx``。"""
+
+
+def __getattr__(name: str):
+    if name == "isrcgym":
+        from . import isrcgym as _isrcgym
+
+        return _isrcgym
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
