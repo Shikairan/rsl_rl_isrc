@@ -33,7 +33,6 @@ import os
 import zmq
 from collections import deque
 import statistics
-import socket,requests,json
 from torch.utils.tensorboard import SummaryWriter
 import torch
 from multiprocessing import Pool
@@ -41,35 +40,9 @@ import struct
 from rsl_rl_isrc.algorithms import PPO
 from rsl_rl_isrc.modules import ActorCritic, ActorCriticRecurrent
 from rsl_rl_isrc.env import VecEnv
+from rsl_rl_isrc.sockets import send_post_request, StepObsPublisher
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
-
-
-
-
-def send_post_request(data, rank, task):
-    header = {'Content-Type': 'application/json'}
-    url = "http://172.17.0.16:18888/post"
-    dataPackage = {
-            "type": "data",
-            "rank": rank,
-            "task": task,
-            "tensor": None
-        }
-    try:
-        dataPackage['tensor'] = data
-        response = requests.post(url, json=dataPackage, headers=header)
-        response.raise_for_status()  # 梾@弾_¥请氾B弾X¯伾P¦弾H~P伾J~_
-        return response.json()  # 达T伾[~^伾S~M幾T漾Z~D JSON 弾U°弾M®
-    except Exception as e:
-        return {"error": str(e)}
-
-
-
-
-
-
-
 
 
 class OnPolicyRunner:
@@ -117,6 +90,7 @@ class OnPolicyRunner:
         self.tot_timesteps = 0
         self.tot_time = 0
         self.current_learning_iteration = 0
+        self.step_obs = StepObsPublisher(self.rank, self.task, self.env.num_envs)
 
         _, _ = self.env.reset()
    
@@ -168,6 +142,7 @@ class OnPolicyRunner:
                 for i in range(self.num_steps_per_env):
                     actions = self.alg.act(obs, critic_obs)
                     obs, privileged_obs, rewards, dones, infos = self.env.step(actions)
+                    self.step_obs.push(obs)
                     self.socket_send() 
                     critic_obs = privileged_obs if privileged_obs is not None else obs
                     obs, critic_obs, rewards, dones = obs.to(self.device), critic_obs.to(self.device), rewards.to(self.device), dones.to(self.device)

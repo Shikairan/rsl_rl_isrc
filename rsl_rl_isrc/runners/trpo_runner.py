@@ -44,20 +44,7 @@ import torch.distributed as dist
 
 from rsl_rl_isrc.algorithms.trpo_policy import TRPOPolicy
 from rsl_rl_isrc.env import VecEnv
-
-
-def send_post_request(data, rank, task):
-    """向远端服务发送状态数据（与 on_policy_runner 兼容）"""
-    try:
-        import requests
-        header = {'Content-Type': 'application/json'}
-        url = "http://172.17.0.16:18888/post"
-        dataPackage = {"type": "data", "rank": rank, "task": task, "tensor": data}
-        response = requests.post(url, json=dataPackage, headers=header)
-        response.raise_for_status()
-        return response.json()
-    except Exception as e:
-        return {"error": str(e)}
+from rsl_rl_isrc.sockets import send_post_request, StepObsPublisher
 
 
 class TRPORunner:
@@ -110,6 +97,7 @@ class TRPORunner:
         self.tot_timesteps = 0
         self.tot_time = 0
         self.current_learning_iteration = 0
+        self.step_obs = StepObsPublisher(self.rank, self.task, self.env.num_envs)
 
         _, _ = self.env.reset()
 
@@ -177,6 +165,7 @@ class TRPORunner:
                     actions = self.policy.act(obs, critic_obs)
 
                     obs, privileged_obs, rewards, dones, infos = self.env.step(actions)
+                    self.step_obs.push(obs)
                     self.socket_send()
 
                     critic_obs = privileged_obs if privileged_obs is not None else obs
