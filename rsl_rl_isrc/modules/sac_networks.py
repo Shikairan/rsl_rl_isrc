@@ -35,30 +35,29 @@ class SACNetworks(nn.Module):
         super(SACNetworks, self).__init__()
 
         self.is_recurrent = False
-        activation_fn = get_activation(activation)
 
-        # Actor network (Policy)
+        # Actor network (Policy) — 每个位置独立调用 get_activation，避免共享同一实例
         actor_layers = []
         actor_layers.append(nn.Linear(num_obs, actor_hidden_dims[0]))
-        actor_layers.append(activation_fn)
+        actor_layers.append(get_activation(activation))
         for l in range(len(actor_hidden_dims)):
             if l == len(actor_hidden_dims) - 1:
                 actor_layers.append(nn.Linear(actor_hidden_dims[l], num_actions))  # mean output
             else:
                 actor_layers.append(nn.Linear(actor_hidden_dims[l], actor_hidden_dims[l + 1]))
-                actor_layers.append(activation_fn)
+                actor_layers.append(get_activation(activation))
         self.actor = nn.Sequential(*actor_layers)
 
         # Log standard deviation layer for Actor
         self.actor_logstd = nn.Linear(actor_hidden_dims[-1], num_actions)
 
-        # Q-networks (Critics)
-        self.qf1 = self._create_q_network(num_obs, num_actions, critic_hidden_dims, activation_fn)
-        self.qf2 = self._create_q_network(num_obs, num_actions, critic_hidden_dims, activation_fn)
+        # Q-networks (Critics) — 传 activation 字符串，各网络内部独立创建实例
+        self.qf1 = self._create_q_network(num_obs, num_actions, critic_hidden_dims, activation)
+        self.qf2 = self._create_q_network(num_obs, num_actions, critic_hidden_dims, activation)
 
         # Target Q-networks
-        self.qf1_target = self._create_q_network(num_obs, num_actions, critic_hidden_dims, activation_fn)
-        self.qf2_target = self._create_q_network(num_obs, num_actions, critic_hidden_dims, activation_fn)
+        self.qf1_target = self._create_q_network(num_obs, num_actions, critic_hidden_dims, activation)
+        self.qf2_target = self._create_q_network(num_obs, num_actions, critic_hidden_dims, activation)
 
         # Initialize target networks with same weights
         self.qf1_target.load_state_dict(self.qf1.state_dict())
@@ -190,21 +189,18 @@ class SACNetworks(nn.Module):
 
 
 def get_activation(act_name):
-    """Get activation function by name"""
-    if act_name == "elu":
-        return nn.ELU()
-    elif act_name == "selu":
-        return nn.SELU()
-    elif act_name == "relu":
-        return nn.ReLU()
-    elif act_name == "crelu":
-        return nn.ReLU()
-    elif act_name == "lrelu":
-        return nn.LeakyReLU()
-    elif act_name == "tanh":
-        return nn.Tanh()
-    elif act_name == "sigmoid":
-        return nn.Sigmoid()
-    else:
-        print("invalid activation function!")
-        return nn.ReLU()
+    """按名称返回激活函数实例；未知名称时抛出 ``ValueError``。"""
+    _map = {
+        "elu":     nn.ELU(),
+        "selu":    nn.SELU(),
+        "relu":    nn.ReLU(),
+        "crelu":   nn.ReLU(),
+        "lrelu":   nn.LeakyReLU(),
+        "tanh":    nn.Tanh(),
+        "sigmoid": nn.Sigmoid(),
+    }
+    if act_name not in _map:
+        raise ValueError(
+            f"未知激活函数 '{act_name}'，支持: {list(_map.keys())}"
+        )
+    return _map[act_name]
