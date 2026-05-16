@@ -13,7 +13,6 @@ import os
 
 from rsl_rl_isrc.modules import ActorCritic
 from rsl_rl_isrc.storage import RolloutStorage
-from torch.nn.parallel import DistributedDataParallel as DDP
 import torch.distributed as dist
 
 
@@ -139,7 +138,7 @@ class PPO:
                 #print("old_actions_log_prob_batch:",old_actions_log_prob_batch.shape)
 
                 # KL
-                if self.desired_kl != None and self.schedule == 'adaptive':
+                if self.desired_kl is not None and self.schedule == 'adaptive':
                     with torch.inference_mode():
                         kl = torch.sum(
                             torch.log(sigma_batch / old_sigma_batch + 1.e-5) + (torch.square(old_sigma_batch) + torch.square(old_mu_batch - mu_batch)) / (2.0 * torch.square(sigma_batch)) - 0.5, axis=-1)

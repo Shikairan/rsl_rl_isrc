@@ -14,7 +14,6 @@ import os
 
 from rsl_rl_isrc.modules import SACNetworks
 from rsl_rl_isrc.storage import ReplayBuffer
-from torch.nn.parallel import DistributedDataParallel as DDP
 import torch.distributed as dist
 
 
