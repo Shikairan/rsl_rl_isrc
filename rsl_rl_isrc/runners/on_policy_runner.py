@@ -23,6 +23,7 @@ from rsl_rl_isrc.algorithms import PPO
 from rsl_rl_isrc.modules import ActorCritic, ActorCriticRecurrent
 from rsl_rl_isrc.env import VecEnv
 from rsl_rl_isrc.sockets import send_post_request, StepObsPublisher
+from rsl_rl_isrc.sockets.http_post import _POST_TIMEOUT
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
 
@@ -177,12 +178,14 @@ class OnPolicyRunner:
                 rank_val = int(self.state_tag[0].item()) if torch.is_tensor(self.state_tag[0]) else int(self.state_tag[0])
                 if dist.get_rank() == rank_val:
                     try:
-                        tmp_state = self.retstate_list[-1].get() if self.retstate_list else {}
+                        # timeout 与 send_post_request 的 _POST_TIMEOUT 保持一致
+                        tmp_state = self.retstate_list[-1].get(timeout=_POST_TIMEOUT + 2) if self.retstate_list else {}
                         if isinstance(tmp_state, dict) and 'error' not in tmp_state:
                             self.state_tag = torch.tensor(tmp_state.get('state', self.state_tag.cpu().tolist()), device=self.device)
-                        self.retstate_list = []
                     except Exception as e:
                         print(e)
+                    finally:
+                        self.retstate_list = []  # 无论成功或异常，始终清理防止内存泄漏
                 # 所有 rank 参与 broadcast（集体操作，必须在 if/try 块外调用）
                 dist.broadcast(self.state_tag, src=rank_val)
                 dist.barrier()

@@ -17,18 +17,22 @@ import torch
 import torch.distributed as dist
 
 _DEFAULT_POST_URL = "http://172.17.0.16:18888/post"
+# 超时时间通过环境变量配置（秒），避免 pool worker 或训练循环永久阻塞
+_POST_TIMEOUT = float(os.environ.get("RSL_RL_ISRC_POST_TIMEOUT", "10"))
+_OBS_TIMEOUT = float(os.environ.get("RSL_RL_ISRC_OBS_TIMEOUT", "2"))
 
 
 def send_post_request(data, rank, task):
     """向 ``RSL_RL_ISRC_POST_URL``（或默认 URL）POST 仿真/自定义张量数据。
 
     请求体含 ``type/data``、``rank``、``task``、``tensor``。成功返回服务端 JSON；异常时返回 ``{"error": ...}``。
+    超时由 ``RSL_RL_ISRC_POST_TIMEOUT``（默认 10s）控制，防止 pool worker 永久挂起。
     """
     header = {"Content-Type": "application/json"}
     url = os.environ.get("RSL_RL_ISRC_POST_URL", _DEFAULT_POST_URL)
     data_package = {"type": "data", "rank": rank, "task": task, "tensor": data}
     try:
-        response = requests.post(url, json=data_package, headers=header)
+        response = requests.post(url, json=data_package, headers=header, timeout=_POST_TIMEOUT)
         response.raise_for_status()
         return response.json()
     except Exception as e:
@@ -123,7 +127,7 @@ class StepObsPublisher:
                     self._url,
                     json=body,
                     headers={"Content-Type": "application/json"},
-                    timeout=30.0,
+                    timeout=_OBS_TIMEOUT,
                 )
                 resp.raise_for_status()
                 data = resp.json()
