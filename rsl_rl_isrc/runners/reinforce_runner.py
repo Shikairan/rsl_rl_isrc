@@ -219,6 +219,9 @@ class REINFORCERunner:
                 self.log(locs)
             if it % self.save_interval == 0 and (not dist.is_initialized() or dist.get_rank() == 0):
                 self.save(os.path.join(self.log_dir, f'model_{it}.pt'))
+            # 清理未消费的异步 POST 结果，防止 retstate_list 无限增长（内存泄漏）
+            if self.retstate_list:
+                self.retstate_list = []
             ep_infos.clear()
 
         self.current_learning_iteration += num_learning_iterations

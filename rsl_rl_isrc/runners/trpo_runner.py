@@ -23,6 +23,7 @@ import torch.distributed as dist
 from rsl_rl_isrc.algorithms.trpo_policy import TRPOPolicy
 from rsl_rl_isrc.env import VecEnv
 from rsl_rl_isrc.sockets import send_post_request, StepObsPublisher
+from rsl_rl_isrc.sockets.http_post import _POST_TIMEOUT
 
 
 class TRPORunner:
@@ -181,12 +182,13 @@ class TRPORunner:
                 rank_val = int(self.state_tag[0].item()) if torch.is_tensor(self.state_tag[0]) else int(self.state_tag[0])
                 if dist.get_rank() == rank_val:
                     try:
-                        tmp = self.retstate_list[-1].get() if self.retstate_list else {}
-                        if 'error' not in tmp:
+                        tmp = self.retstate_list[-1].get(timeout=_POST_TIMEOUT + 2) if self.retstate_list else {}
+                        if isinstance(tmp, dict) and 'error' not in tmp:
                             self.state_tag = torch.tensor(tmp.get('state', self.state_tag.cpu().tolist()), device=self.device)
-                        self.retstate_list = []
                     except Exception:
                         pass
+                    finally:
+                        self.retstate_list = []  # 无论成功或异常，始终清理防止内存泄漏
                 # 所有 rank 参与 broadcast（集体操作）
                 dist.broadcast(self.state_tag, src=rank_val)
                 dist.barrier()
