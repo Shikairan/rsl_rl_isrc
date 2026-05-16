@@ -83,7 +83,7 @@ class SACRunner:
         self.current_learning_iteration = 0
         self.step_obs = StepObsPublisher(self.rank, self.task, self.env.num_envs)
 
-        self.env.reset()
+        self.env.reset(torch.arange(self.env.num_envs))
 
     def socket_send(self):
         """发送状态到远端（若 env 支持 base_pos 等）"""

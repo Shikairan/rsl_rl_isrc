@@ -338,10 +338,10 @@ class TRPO:
     def _update_policy_trpo(self, states: torch.Tensor, actions: torch.Tensor,
                            advantages: torch.Tensor, old_mean: torch.Tensor,
                            old_sigma: torch.Tensor, old_log_prob: torch.Tensor) -> float:
+        """策略更新：使用共轭梯度 + 线搜索实现信赖域约束。"""
         # RNN: 重置隐藏状态以进行批处理更新
         if hasattr(self.policy_net, 'reset'):
             self.policy_net.reset(dones=None)
-        """✅ 修复：策略更新使用信赖域优化"""
 
         # 注意：优势函数已经在RolloutStorage.compute_returns中标准化过了
         # 这里只需要确保形状正确（如果advantages是2D，需要squeeze）

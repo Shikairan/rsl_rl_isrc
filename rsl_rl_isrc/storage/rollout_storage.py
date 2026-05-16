@@ -310,7 +310,11 @@ class RolloutStorage:
             for reward in reversed(episode.rewards):
                 G = reward + gamma * G
                 returns.insert(0, G)
-            episode.returns = [torch.tensor(r, device=self.device) for r in returns]
+            episode.returns = [
+                r.detach().clone().to(self.device) if isinstance(r, torch.Tensor)
+                else torch.tensor(r, dtype=torch.float32, device=self.device)
+                for r in returns
+            ]
 
             # Store completed episode
             self.off_policy_episodes.append(episode)

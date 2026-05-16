@@ -163,7 +163,6 @@ class SAC:
         """Sample action from policy"""
         if not torch.is_tensor(obs):
             obs = torch.tensor(obs, dtype=torch.float32, device=self.device)
-        self.sac_networks.update_distribution(obs)
 
         if self.global_step < self.learning_starts:
             return None

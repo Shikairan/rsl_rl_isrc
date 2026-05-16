@@ -76,28 +76,34 @@ class SACNetworks(nn.Module):
         self.distribution = None
         Normal.set_default_validate_args = False
 
-    def _create_q_network(self, num_obs, num_actions, hidden_dims, activation_fn):
-        """Create a Q-network that takes state and action as input"""
+    def _create_q_network(self, num_obs, num_actions, hidden_dims, activation):
+        """Create a Q-network that takes state and action as input."""
         layers = []
         input_dim = num_obs + num_actions  # concatenate state and action
         layers.append(nn.Linear(input_dim, hidden_dims[0]))
-        layers.append(activation_fn)
+        layers.append(get_activation(activation))
         for l in range(len(hidden_dims)):
             if l == len(hidden_dims) - 1:
                 layers.append(nn.Linear(hidden_dims[l], 1))  # Q-value output
             else:
                 layers.append(nn.Linear(hidden_dims[l], hidden_dims[l + 1]))
-                layers.append(activation_fn)
+                layers.append(get_activation(activation))
         return nn.Sequential(*layers)
 
     def set_action_bounds(self, action_low, action_high):
         """Set action bounds for scaling"""
-        self.action_scale.data = torch.tensor(
-            (action_high - action_low) / 2.0, dtype=torch.float32
-        )
-        self.action_bias.data = torch.tensor(
-            (action_high + action_low) / 2.0, dtype=torch.float32
-        )
+        if isinstance(action_low, torch.Tensor):
+            scale = ((action_high - action_low) / 2.0).float()
+            bias = ((action_high + action_low) / 2.0).float()
+        else:
+            scale = torch.tensor(
+                (action_high - action_low) / 2.0, dtype=torch.float32
+            )
+            bias = torch.tensor(
+                (action_high + action_low) / 2.0, dtype=torch.float32
+            )
+        self.action_scale.data.copy_(scale)
+        self.action_bias.data.copy_(bias)
 
     def reset(self, dones=None):
         pass
