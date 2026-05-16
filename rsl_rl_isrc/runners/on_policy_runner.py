@@ -45,7 +45,7 @@ class OnPolicyRunner:
         self.device = device
         self.env = env
         #print(self.env.num_dof)
-        self.pool = Pool(processes=60)
+        self.pool = Pool(processes=60) if dist.is_initialized() else None
         self.state_tag = torch.tensor([0,0,0,64]).to(self.device)
         if self.env.num_privileged_obs is not None:
             num_critic_obs = self.env.num_privileged_obs 
@@ -75,7 +75,7 @@ class OnPolicyRunner:
         self.current_learning_iteration = 0
         self.step_obs = StepObsPublisher(self.rank, self.task, self.env.num_envs)
 
-        _, _ = self.env.reset()
+        self.env.reset(torch.arange(self.env.num_envs))
    
 
     def socket_send(self):
@@ -84,22 +84,27 @@ class OnPolicyRunner:
         仅当 ``state_tag[0]`` 等于本进程 ``rank`` 且 ``state_tag[1] != 1`` 时发送；
         返回的 ``state`` 在 ``learn`` 中由指定 rank 拉取并 ``broadcast`` 更新 ``state_tag``。
         """
-        if self.state_tag[0] == self.rank:
-            #up0 = torch.tensor([[0.0]*9]*(self.state_tag[3] - self.state_tag[2]))
-            if self.state_tag[1] == 1.0:
-                pass 
-            else:
-                location = self.env.base_pos[self.state_tag[2]:self.state_tag[3],:]
-
-                location[:,1] = location[:,1] - torch.arange(self.state_tag[2], self.state_tag[3]).to(location.device)*3
-                
-                tt = torch.cat((location,self.env.base_quat[self.state_tag[2]:self.state_tag[3],:],self.env.dof_pos[self.state_tag[2]:self.state_tag[3],:]), dim=1).cpu()
-                tt2 = tt.tolist()
-                #tt2 = torch.cat([tt, up0], dim=1).tolist()
-                #print(self.rank, len(tt2[0]), type(tt2), type(tt2[0])) 
-                ret = self.pool.apply_async(send_post_request, args=(tt2,self.rank,self.task)) 
-                self.retstate_list.append(ret)
-        else:
+        if not dist.is_initialized() or self.pool is None:
+            return
+        if not hasattr(self.env, 'base_pos') or not hasattr(self.env, 'base_quat') or not hasattr(self.env, 'dof_pos'):
+            return
+        if self.state_tag[0] != self.rank:
+            return
+        if self.state_tag[1] == 1.0:
+            return
+        try:
+            location = self.env.base_pos[self.state_tag[2]:self.state_tag[3], :].clone()
+            location[:, 1] = location[:, 1] - torch.arange(
+                int(self.state_tag[2].item()), int(self.state_tag[3].item()), device=location.device
+            ).float() * 3
+            tt = torch.cat((
+                location,
+                self.env.base_quat[self.state_tag[2]:self.state_tag[3], :],
+                self.env.dof_pos[self.state_tag[2]:self.state_tag[3], :]
+            ), dim=1).cpu().tolist()
+            ret = self.pool.apply_async(send_post_request, args=(tt, self.rank, self.task))
+            self.retstate_list.append(ret)
+        except Exception:
             pass
  
     def learn(self, num_learning_iterations, init_at_random_ep_len=False):
@@ -114,7 +119,7 @@ class OnPolicyRunner:
             仅 rank0 执行 ``alg.update``，随后对所有 rank 广播 actor_critic 参数。
         """
         # initialize writer
-        if self.log_dir is not None and self.writer is None and dist.get_rank() == 0:
+        if self.log_dir is not None and self.writer is None and (not dist.is_initialized() or dist.get_rank() == 0):
             self.writer = SummaryWriter(log_dir=self.log_dir, flush_secs=10)
         if init_at_random_ep_len:
             self.env.episode_length_buf = torch.randint_like(self.env.episode_length_buf, high=int(self.env.max_episode_length))
@@ -129,8 +134,9 @@ class OnPolicyRunner:
         cur_reward_sum = torch.zeros(self.env.num_envs, dtype=torch.float, device=self.device)
         cur_episode_length = torch.zeros(self.env.num_envs, dtype=torch.float, device=self.device)
         tot_iter = self.current_learning_iteration + num_learning_iterations
-        for param in self.alg.actor_critic.parameters():
-            dist.broadcast(param.data, src=0)
+        if dist.is_initialized():
+            for param in self.alg.actor_critic.parameters():
+                dist.broadcast(param.data, src=0)
             dist.barrier()
         for it in range(self.current_learning_iteration, tot_iter):
             start = time.time()
@@ -165,49 +171,48 @@ class OnPolicyRunner:
                 start = stop
                 self.alg.compute_returns(critic_obs)
             
-            dist.barrier()
-            if dist.get_rank() == self.state_tag[0]:
-                try:
-                    tmp_state = self.retstate_list[-1].get()#['state']
-                    #print(tmp_state)
-                    if 'error' in tmp_state.keys():
-                        tmp_state = self.state_tag
-                    else:
-                        tmp_state = tmp_state['state']
-                    self.state_tag = torch.tensor(tmp_state).to(self.device)
-                    
-                    dist.broadcast(self.state_tag, src=dist.get_rank())
+            if dist.is_initialized():
+                dist.barrier()
+                # state_tag 遥测同步：由 state_tag[0] 负责更新，所有 rank 参与 broadcast
+                rank_val = int(self.state_tag[0].item()) if torch.is_tensor(self.state_tag[0]) else int(self.state_tag[0])
+                if dist.get_rank() == rank_val:
+                    try:
+                        tmp_state = self.retstate_list[-1].get() if self.retstate_list else {}
+                        if isinstance(tmp_state, dict) and 'error' not in tmp_state:
+                            self.state_tag = torch.tensor(tmp_state.get('state', self.state_tag.cpu().tolist()), device=self.device)
+                        self.retstate_list = []
+                    except Exception as e:
+                        print(e)
+                # 所有 rank 参与 broadcast（集体操作，必须在 if/try 块外调用）
+                dist.broadcast(self.state_tag, src=rank_val)
+                dist.barrier()
+                self.alg.storage.broadcast()
+
+                if dist.get_rank() == 0:
+                    mean_value_loss, mean_surrogate_loss = self.alg.update()
                     dist.barrier()
-                    self.retstate_list = []
-                except Exception as e:
-                    print(e)
+                else:
+                    self.alg.storage.clear()
+                    dist.barrier()
             else:
-                dist.broadcast(self.state_tag, src=self.state_tag[0])
-                dist.barrier()
-            self.alg.storage.broadcast()
-
-            if dist.get_rank() == 0:
                 mean_value_loss, mean_surrogate_loss = self.alg.update()
-                dist.barrier()
-            else:
-                self.alg.storage.clear()
-                dist.barrier()
 
-            for param in self.alg.actor_critic.parameters():
-                dist.broadcast(param.data, src=0)
+            if dist.is_initialized():
+                for param in self.alg.actor_critic.parameters():
+                    dist.broadcast(param.data, src=0)
                 dist.barrier()
 
             stop = time.time()
             learn_time = stop - start
             
-            if (self.log_dir is not None) and dist.get_rank() == 0 :
+            if self.log_dir is not None and (not dist.is_initialized() or dist.get_rank() == 0):
                 self.log(locals())
-            if it % self.save_interval == 0  and dist.get_rank() == 0:
+            if it % self.save_interval == 0 and (not dist.is_initialized() or dist.get_rank() == 0):
                 self.save(os.path.join(self.log_dir, 'model_{}.pt'.format(it)))
             ep_infos.clear()
         
         self.current_learning_iteration += num_learning_iterations
-        if dist.get_rank() == 0:
+        if not dist.is_initialized() or dist.get_rank() == 0:
             self.save(os.path.join(self.log_dir, 'model_{}.pt'.format(self.current_learning_iteration)))
 
     def log(self, locs, width=80, pad=35):

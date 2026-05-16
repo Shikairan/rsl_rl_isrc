@@ -261,7 +261,9 @@ class RolloutStorage:
         return trajectory_lengths.float().mean(), self.rewards.mean()
 
     def mini_batch_generator(self, num_mini_batches, num_epochs=8):
-        batch_size = self.num_envs * self.num_transitions_per_env
+        # 使用 observations 的实际第二维，broadcast 后该值可能为 N_world * num_envs
+        actual_num_envs = self.observations.shape[1]
+        batch_size = actual_num_envs * self.num_transitions_per_env
         mini_batch_size = batch_size // num_mini_batches
         indices = torch.randperm(num_mini_batches*mini_batch_size, requires_grad=False, device=self.device)
 
@@ -342,8 +344,10 @@ class RolloutStorage:
         else: 
             padded_critic_obs_trajectories = padded_obs_trajectories
 
-        num_mini_batches = 4
-        mini_batch_size =  dist.get_world_size() * self.num_envs  // num_mini_batches
+        # 使用实际的 env 数量（broadcast 后可能扩展），以及 is_initialized 保护
+        actual_num_envs = self.observations.shape[1]
+        world_size = dist.get_world_size() if dist.is_initialized() else 1
+        mini_batch_size = actual_num_envs // num_mini_batches
         for ep in range(num_epochs):
             first_traj = 0
             for i in range(num_mini_batches):
@@ -374,7 +378,7 @@ class RolloutStorage:
                 hid_c_batch = [ saved_hidden_states.permute(2, 0, 1, 3)[last_was_done][first_traj:last_traj].transpose(1, 0).contiguous()
                                 for saved_hidden_states in self.saved_hidden_states_c ]
                 hid_a_batch = hid_a_batch[0] if len(hid_a_batch)==1 else hid_a_batch
-                hid_c_batch = hid_c_batch[0] if len(hid_c_batch)==1 else hid_a_batch
+                hid_c_batch = hid_c_batch[0] if len(hid_c_batch)==1 else hid_c_batch
 
                 yield obs_batch, critic_obs_batch, actions_batch, values_batch, advantages_batch, returns_batch, \
                        old_actions_log_prob_batch, old_mu_batch, old_sigma_batch, (hid_a_batch, hid_c_batch), masks_batch
