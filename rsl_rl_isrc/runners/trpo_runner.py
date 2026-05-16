@@ -169,25 +169,31 @@ class TRPORunner:
             collection_time = stop - start
 
             start = stop
+
+            # 步骤1：各 rank 用本地数据各自计算 returns（形状匹配），必须在 broadcast 前完成
+            with torch.no_grad():
+                self.policy.compute_returns(critic_obs)
+
             if dist.is_initialized():
                 dist.barrier()
+                # state_tag 遥测同步：由 rank 0 负责更新并广播给所有 rank
+                # 修复：dist.broadcast 是集体操作，所有 rank 都必须调用
                 rank_val = int(self.state_tag[0].item()) if torch.is_tensor(self.state_tag[0]) else int(self.state_tag[0])
                 if dist.get_rank() == rank_val:
                     try:
                         tmp = self.retstate_list[-1].get() if self.retstate_list else {}
                         if 'error' not in tmp:
                             self.state_tag = torch.tensor(tmp.get('state', self.state_tag.cpu().tolist()), device=self.device)
-                        dist.broadcast(self.state_tag, src=dist.get_rank())
                         self.retstate_list = []
                     except Exception:
                         pass
+                # 所有 rank 参与 broadcast（集体操作）
+                dist.broadcast(self.state_tag, src=rank_val)
                 dist.barrier()
 
+                # 步骤2：broadcast 汇聚各 rank 已计算好的 returns/advantages 到 rank 0
                 if hasattr(self.policy.algorithm.storage, 'broadcast'):
                     self.policy.algorithm.storage.broadcast()
-
-            with torch.no_grad():
-                self.policy.compute_returns(critic_obs)
 
             if dist.is_initialized():
                 if dist.get_rank() == 0:

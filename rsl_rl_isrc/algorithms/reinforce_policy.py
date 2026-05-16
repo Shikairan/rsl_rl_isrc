@@ -89,8 +89,10 @@ class REINFORCEPolicy:
             self.world_size = dist.get_world_size()
             self.rank = dist.get_rank()
             if self.world_size > 1:
-                # Wrap policy for distributed training
-                self.actor = DDP(self.actor, device_ids=[self.device])
+                # device_ids must be a list of ints (GPU indices) for CUDA; None for CPU
+                _dev = torch.device(self.device)
+                _device_ids = [_dev.index if _dev.index is not None else 0] if _dev.type == 'cuda' else None
+                self.actor = DDP(self.actor, device_ids=_device_ids)
         else:
             self.world_size = 1
             self.rank = 0

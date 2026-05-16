@@ -204,12 +204,14 @@ class RolloutStorage:
         
         self.mu = self.gather_variable_length(self.mu)
         self.sigma = self.gather_variable_length(self.sigma)
-        saved_hidden_states_a_0 = self.gather_variable_length(self.saved_hidden_states_a[0])
-        saved_hidden_states_c_0 = self.gather_variable_length(self.saved_hidden_states_c[0])
-        saved_hidden_states_a_1 = self.gather_variable_length(self.saved_hidden_states_a[1])
-        saved_hidden_states_c_1 = self.gather_variable_length(self.saved_hidden_states_c[1])
-        self.saved_hidden_states_a = (saved_hidden_states_a_0, saved_hidden_states_a_1)
-        self.saved_hidden_states_c = (saved_hidden_states_c_0, saved_hidden_states_c_1)
+        # 只有 RNN 存储才有隐藏状态；非 RNN 时跳过，避免 NoneType 错误
+        if self.saved_hidden_states_a is not None:
+            saved_hidden_states_a_0 = self.gather_variable_length(self.saved_hidden_states_a[0])
+            saved_hidden_states_c_0 = self.gather_variable_length(self.saved_hidden_states_c[0])
+            saved_hidden_states_a_1 = self.gather_variable_length(self.saved_hidden_states_a[1])
+            saved_hidden_states_c_1 = self.gather_variable_length(self.saved_hidden_states_c[1])
+            self.saved_hidden_states_a = (saved_hidden_states_a_0, saved_hidden_states_a_1)
+            self.saved_hidden_states_c = (saved_hidden_states_c_0, saved_hidden_states_c_1)
         if dist.is_available() and dist.is_initialized() and dist.get_rank() == 0:
             self.dones =  self.dones.byte()
             self.advantages = (self.advantages - self.advantages.mean()) / (self.advantages.std() + 1e-8)
