@@ -57,7 +57,7 @@ class REINFORCERunner:
             action_space_type=action_space_type,
             device=self.device,
             **self.alg_cfg,
-            **self.policy_cfg
+            **{k: v for k, v in self.policy_cfg.items() if k != 'action_space_type'}
         )
 
         self.num_steps_per_env = self.cfg["num_steps_per_env"]
@@ -81,7 +81,7 @@ class REINFORCERunner:
         self.action_space_type = action_space_type
         self.step_obs = StepObsPublisher(self.rank, self.task, self.env.num_envs)
 
-        _, _ = self.env.reset()
+        self.env.reset(torch.arange(self.env.num_envs))
 
     def socket_send(self):
         """发送状态到远端（若 env 支持 base_pos 等）"""
