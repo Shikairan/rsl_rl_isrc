@@ -33,7 +33,6 @@ class OnPolicyRunner:
                  train_cfg,
                  log_dir=None,
                  device='cpu'):
-        print(train_cfg)
         self.cfg=train_cfg["runner"]
         self.task = self.cfg["experiment_name"]
         self.alg_cfg = train_cfg["algorithm"]
@@ -49,14 +48,28 @@ class OnPolicyRunner:
             num_critic_obs = self.env.num_privileged_obs 
         else:
             num_critic_obs = self.env.num_obs
-        actor_critic_class = eval(self.policy_cfg["policy_class_name"]) # ActorCritic
-        actor_critic: ActorCritic = actor_critic_class( self.env.num_obs,
-                                                        num_critic_obs,
-                                                        self.env.num_actions,
-                                                        **self.policy_cfg).to(self.device)
-        alg_class = eval(self.alg_cfg["algorithm_class_name"]) # PPO
+        # 安全的类名解析（用白名单替代 eval()，避免任意代码执行）
+        _policy_registry = {
+            "ActorCritic":          ActorCritic,
+            "ActorCriticRecurrent": ActorCriticRecurrent,
+        }
+        _alg_registry = {
+            "PPO": PPO,
+        }
+        policy_class_name = self.policy_cfg.get("policy_class_name", "ActorCritic")
+        alg_class_name    = self.alg_cfg.get("algorithm_class_name", "PPO")
+        actor_critic_class = _policy_registry.get(policy_class_name)
+        if actor_critic_class is None:
+            raise ValueError(f"未知策略类 '{policy_class_name}'，支持: {list(_policy_registry.keys())}")
+        alg_class = _alg_registry.get(alg_class_name)
+        if alg_class is None:
+            raise ValueError(f"未知算法类 '{alg_class_name}'，支持: {list(_alg_registry.keys())}")
+
+        actor_critic: ActorCritic = actor_critic_class(
+            self.env.num_obs, num_critic_obs, self.env.num_actions,
+            **self.policy_cfg
+        ).to(self.device)
         self.world_size = dist.get_world_size() if dist.is_initialized() else 1
-        # Remove algorithm_class_name from kwargs as it's not a parameter of the algorithm
         alg_kwargs = {k: v for k, v in self.alg_cfg.items() if k != "algorithm_class_name"}
         self.alg: PPO = alg_class(actor_critic, device=self.device, **alg_kwargs)
         self.num_steps_per_env = self.cfg["num_steps_per_env"]

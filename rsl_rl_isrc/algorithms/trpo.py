@@ -196,145 +196,35 @@ class TRPO:
         return mean_value_loss / num_updates, mean_policy_loss / num_updates
 
     def _update_value_function(self, states: torch.Tensor, returns: torch.Tensor) -> float:
-        """✅ 使用Adam优化器替代SciPy L-BFGS"""
+        """使用 Adam 优化器更新价值函数，支持 RNN 网络。"""
+        if self.vf_iters == 0:
+            return 0.0
+
         value_loss = 0.0
-
-        # 暂时移除学习率调度器，先用固定学习率调试
-        # if not hasattr(self, 'vf_scheduler') or self.vf_scheduler is None:
-        #     self.vf_scheduler = torch.optim.lr_scheduler.StepLR(
-        #         self.vf_optimizer, step_size=30, gamma=0.9
-        #     )
-        self.vf_scheduler = None
-
-        # RNN: 重置隐藏状态以进行批处理更新
-        if hasattr(self.value_net, 'reset'):
-            self.value_net.reset(dones=None)
-
-        # 调试信息：检查数据范围（仅在第一次迭代时打印）
-        if self.vf_iters > 0:
-            with torch.no_grad():
-                initial_values = self.value_net(states)
-                # RNN输出可能有额外维度，需要压缩
-                if initial_values.dim() == 3:  # [seq_len, batch_size, 1]
-                    initial_values = initial_values.squeeze(-1)  # [seq_len, batch_size]
-                    if initial_values.dim() == 2:
-                        initial_values = initial_values.transpose(0, 1)  # [batch_size, seq_len]
-                        initial_values = initial_values.reshape(-1)  # [batch_size * seq_len]
-                elif initial_values.dim() == 2:  # [batch_size, 1]
-                    initial_values = initial_values.squeeze(-1)
-
-                value_error = (returns - initial_values).abs().mean()
-                print(initial_values.shape, returns.shape)
-                print(f"  价值函数初始误差: {value_error:.3f}, 价值范围: [{initial_values.min():.3f}, {initial_values.max():.3f}], 回报范围: [{returns.min():.3f}, {returns.max():.3f}]")
-
-        for iter_idx in range(self.vf_iters):
-            # RNN: 重置隐藏状态确保每次迭代独立
+        for _ in range(self.vf_iters):
             if hasattr(self.value_net, 'reset'):
                 self.value_net.reset(dones=None)
 
             values = self.value_net(states)
-            # RNN输出可能有额外维度，需要压缩
+            # 兼容 RNN 可能输出的额外维度
             if values.dim() == 3:  # [seq_len, batch_size, 1]
-                values = values.squeeze(-1)  # [seq_len, batch_size]
-                if values.dim() == 2:
-                    values = values.transpose(0, 1)  # [batch_size, seq_len]
-                    values = values.reshape(-1)  # [batch_size * seq_len]
+                values = values.squeeze(-1).transpose(0, 1).reshape(-1)
             elif values.dim() == 2:  # [batch_size, 1]
                 values = values.squeeze(-1)
 
-            # MSE损失
+            # MSE 损失 + L2 正则化
             loss = (returns - values).pow(2).mean()
-
-            # L2正则化 - 对所有参数的L2范数求和
-            l2_loss = 0.0
-            for param in self.value_net.parameters():
-                l2_loss += param.pow(2).sum()
-            loss += self.l2_reg * l2_loss
+            l2_loss = sum(p.pow(2).sum() for p in self.value_net.parameters())
+            loss = loss + self.l2_reg * l2_loss
 
             self.vf_optimizer.zero_grad()
             loss.backward()
-
-            # 检查梯度是否有效
-            total_grad_norm = 0.0
-            param_count = 0
-            for param in self.value_net.parameters():
-                if param.grad is not None:
-                    total_grad_norm += param.grad.data.norm(2).item() ** 2
-                    param_count += 1
-
-            total_grad_norm = total_grad_norm ** 0.5
-            if total_grad_norm == 0:
-                print(f"    ⚠️ 梯度为零！loss={loss.item():.6f}")
-
-            # 更宽松的梯度裁剪，让梯度有更多自由度
-            grad_norm = torch.nn.utils.clip_grad_norm_(self.value_net.parameters(), max_norm=100.0)
-
+            torch.nn.utils.clip_grad_norm_(self.value_net.parameters(), max_norm=100.0)
             self.vf_optimizer.step()
-
-            # 每50次迭代检查一次参数变化
-            if (iter_idx + 1) % 50 == 0:
-                with torch.no_grad():
-                    # RNN: 重置隐藏状态确保检查独立
-                    if hasattr(self.value_net, 'reset'):
-                        self.value_net.reset(dones=None)
-                    new_values = self.value_net(states[:5])  # 检查前5个样本
-                    # RNN输出可能有额外维度，需要压缩
-                    if new_values.dim() == 3:  # [seq_len, batch_size, 1]
-                        new_values = new_values.squeeze(-1)  # [seq_len, batch_size]
-                        if new_values.dim() == 2:
-                            new_values = new_values.transpose(0, 1)  # [batch_size, seq_len]
-                            new_values = new_values.reshape(-1)  # [batch_size * seq_len]
-                    elif new_values.dim() == 2:  # [batch_size, 1]
-                        new_values = new_values.squeeze(-1)
-
-                    print(f"    参数检查 - loss={loss.item():.6f}, grad_norm={grad_norm:.6f}, lr={self.vf_optimizer.param_groups[0]['lr']:.6f}")
-                    print(f"    值变化: [{new_values.min():.3f}, {new_values.max():.3f}]")
-
-            # 更新学习率 (暂时禁用)
-            # if self.vf_scheduler:
-            #     self.vf_scheduler.step()
 
             value_loss += loss.item()
 
-            # 每20次迭代打印一次进度
-            if (iter_idx + 1) % 20 == 0:
-                with torch.no_grad():
-                    # RNN: 重置隐藏状态确保检查独立
-                    if hasattr(self.value_net, 'reset'):
-                        self.value_net.reset(dones=None)
-                    current_values = self.value_net(states)
-                    # RNN输出可能有额外维度，需要压缩
-                    if current_values.dim() == 3:  # [seq_len, batch_size, 1]
-                        current_values = current_values.squeeze(-1)  # [seq_len, batch_size]
-                        if current_values.dim() == 2:
-                            current_values = current_values.transpose(0, 1)  # [batch_size, seq_len]
-                            current_values = current_values.reshape(-1)  # [batch_size * seq_len]
-                    elif current_values.dim() == 2:  # [batch_size, 1]
-                        current_values = current_values.squeeze(-1)
-
-                    current_error = (returns - current_values).abs().mean()
-                    print(f"    VF迭代 {iter_idx+1}/{self.vf_iters}: 误差={current_error:.3f}, 范围=[{current_values.min():.3f}, {current_values.max():.3f}]")
-
-        # 打印最终的价值函数误差
-        with torch.no_grad():
-            # RNN: 重置隐藏状态确保检查独立
-            if hasattr(self.value_net, 'reset'):
-                self.value_net.reset(dones=None)
-            final_values = self.value_net(states)
-            # RNN输出可能有额外维度，需要压缩
-            if final_values.dim() == 3:  # [seq_len, batch_size, 1]
-                final_values = final_values.squeeze(-1)  # [seq_len, batch_size]
-                if final_values.dim() == 2:
-                    final_values = final_values.transpose(0, 1)  # [batch_size, seq_len]
-                    final_values = final_values.reshape(-1)  # [batch_size * seq_len]
-            elif final_values.dim() == 2:  # [batch_size, 1]
-                final_values = final_values.squeeze(-1)
-
-            final_error = (returns - final_values).abs().mean()
-            print(f"  价值函数最终误差: {final_error:.3f}, 价值范围: [{final_values.min():.3f}, {final_values.max():.3f}]")
-
         return value_loss / self.vf_iters
-
     def _update_policy_trpo(self, states: torch.Tensor, actions: torch.Tensor,
                            advantages: torch.Tensor, old_mean: torch.Tensor,
                            old_sigma: torch.Tensor, old_log_prob: torch.Tensor) -> float:

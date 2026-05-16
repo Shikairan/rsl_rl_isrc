@@ -58,20 +58,6 @@ class TrpoValueFunction(nn.Module):
         nn.init.xavier_normal_(self.value_head.weight, gain=1.0)
         nn.init.constant_(self.value_head.bias, -200.0)  # 直接设置为合理值
 
-        # 添加网络检查
-        self.check_network(num_inputs)
-    def check_network(self, num_inputs):
-        """检查网络是否能产生有意义的变化"""
-        test_input = torch.randn(10, num_inputs)
-        with torch.no_grad():
-            output = self.forward(test_input)
-            output_range = output.max() - output.min()
-            print(f"✅ 价值函数初始化检查 - 输出范围: {output_range:.3f}")
-            if output_range < 1.0:
-                print("⚠️ 网络输出变化太小，可能初始化有问题")
-            else:
-                print("✅ 网络初始化正常")
-
     def forward(self, x):
         x = torch.relu(self.affine1(x))  # 改用ReLU避免梯度消失
         x = torch.relu(self.affine2(x))
@@ -177,25 +163,7 @@ class TrpoValueFunctionRecurrent(nn.Module):
         nn.init.xavier_normal_(self.value_head.weight, gain=1.0)
         nn.init.constant_(self.value_head.bias, -200.0)  # 直接设置为合理值
 
-        # 添加网络检查
-        self.check_network(self.num_inputs)
-
         print(f"TrpoValueFunctionRecurrent: RNN({rnn_type}, {rnn_hidden_size}) -> Value")
-
-    def check_network(self, input_size):
-        """检查网络是否能产生有意义的变化"""
-        # 对于RNN网络，我们需要创建正确的输入形状
-        test_input = torch.randn(1, input_size)  # [batch_size, input_size] - 使用batch_size=1
-        with torch.no_grad():
-            # 重置hidden states
-            self.memory.hidden_states = None
-            output = self.forward(test_input)
-            output_range = output.max() - output.min()
-            print(f"✅ RNN价值函数初始化检查 - 输出范围: {output_range:.3f}")
-            if output_range < 1.0:
-                print("⚠️ RNN网络输出变化太小，可能初始化有问题")
-            else:
-                print("✅ RNN网络初始化正常")
 
     def forward(self, x, masks=None, hidden_states=None):
         # RNN处理

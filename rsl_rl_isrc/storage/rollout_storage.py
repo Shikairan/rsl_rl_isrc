@@ -337,7 +337,6 @@ class RolloutStorage:
         self.off_policy_episodes.clear()
 
     def reccurent_mini_batch_generator(self, num_mini_batches, num_epochs=8):
-        print("reccurent:",self.observations.shape, self.dones.shape)
         padded_obs_trajectories, trajectory_masks = split_and_pad_trajectories(self.observations, self.dones)
         if self.privileged_observations is not None: 
             padded_critic_obs_trajectories, _ = split_and_pad_trajectories(self.privileged_observations, self.dones)
