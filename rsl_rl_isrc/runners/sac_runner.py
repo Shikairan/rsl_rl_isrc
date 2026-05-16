@@ -165,7 +165,11 @@ class SACRunner:
                     actions=actions
                 )
 
-                qf1_loss, qf2_loss, actor_loss, alpha_loss = self.alg.update()
+                # 分布式时只有 rank 0 执行梯度更新；其它 rank 的更新会被广播覆盖属浪费
+                if not dist.is_initialized() or dist.get_rank() == 0:
+                    qf1_loss, qf2_loss, actor_loss, alpha_loss = self.alg.update()
+                else:
+                    qf1_loss, qf2_loss, actor_loss, alpha_loss = 0.0, 0.0, 0.0, 0.0
 
                 if self.log_dir is not None:
                     if 'episode' in infos:
@@ -188,6 +192,13 @@ class SACRunner:
                 dist.barrier()
                 for param in self.alg.sac_networks.parameters():
                     dist.broadcast(param.data, src=0)
+                # 同步 global_step 和 alpha，确保所有 rank 的更新调度一致
+                gs_tensor = torch.tensor([self.alg.global_step], dtype=torch.long, device=self.device)
+                dist.broadcast(gs_tensor, src=0)
+                self.alg.global_step = int(gs_tensor.item())
+                if self.alg.autotune and self.alg.log_alpha is not None:
+                    dist.broadcast(self.alg.log_alpha.data, src=0)
+                    self.alg.alpha = self.alg.log_alpha.exp().item()
                 dist.barrier()
 
             if self.log_dir is not None and (not dist.is_initialized() or dist.get_rank() == 0):
