@@ -107,7 +107,13 @@ class Memory(torch.nn.Module):
         return out
 
     def reset(self, dones=None):
-        """将 ``dones`` 为 True 的并行环境对应的隐状态切片清零。"""
-        # When the RNN is an LSTM, self.hidden_states_a is a list with hidden_state and cell_state
+        """将 ``dones`` 为 True 的并行环境对应的隐状态切片清零。
+        若 ``dones`` 为 None 或 ``hidden_states`` 尚未初始化则清空全部隐状态。
+        """
+        if self.hidden_states is None:
+            return
+        if dones is None:
+            self.hidden_states = None
+            return
         for hidden_state in self.hidden_states:
             hidden_state[..., dones, :] = 0.0

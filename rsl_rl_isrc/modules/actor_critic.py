@@ -121,21 +121,18 @@ class ActorCritic(nn.Module):
         return value
 
 def get_activation(act_name):
-    """按名称返回 ``nn`` 激活模块实例；未知名称时打印提示并返回 ``None``。"""
-    if act_name == "elu":
-        return nn.ELU()
-    elif act_name == "selu":
-        return nn.SELU()
-    elif act_name == "relu":
-        return nn.ReLU()
-    elif act_name == "crelu":
-        return nn.ReLU()
-    elif act_name == "lrelu":
-        return nn.LeakyReLU()
-    elif act_name == "tanh":
-        return nn.Tanh()
-    elif act_name == "sigmoid":
-        return nn.Sigmoid()
-    else:
-        print("invalid activation function!")
-        return None
+    """按名称返回 ``nn`` 激活模块实例；未知名称时抛出 ``ValueError``。"""
+    _map = {
+        "elu":     nn.ELU(),
+        "selu":    nn.SELU(),
+        "relu":    nn.ReLU(),
+        "crelu":   nn.ReLU(),
+        "lrelu":   nn.LeakyReLU(),
+        "tanh":    nn.Tanh(),
+        "sigmoid": nn.Sigmoid(),
+    }
+    if act_name not in _map:
+        raise ValueError(
+            f"未知激活函数 '{act_name}'，支持: {list(_map.keys())}"
+        )
+    return _map[act_name]

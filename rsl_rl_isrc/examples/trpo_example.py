@@ -2,141 +2,87 @@
 """
 本脚本：TRPO 示例配置与训练入口演示（依赖 ``rsl_rl_isrc`` 包）。
 
-TRPO算法使用示例
-基于rsl_rl框架的Trust Region Policy Optimization实现
+展示如何使用 TRPOPolicy 训练一个连续动作任务（Pendulum 模拟）。
+
+运行方式::
+
+    python -m rsl_rl_isrc.examples.trpo_example
 """
 
 import torch
 import numpy as np
-from rsl_rl_isrc.modules import ActorCritic
-from rsl_rl_isrc.algorithms import TRPO
+from rsl_rl_isrc.algorithms import TRPOPolicy
 from rsl_rl_isrc.storage import RolloutStorage
 
-def create_trpo_config():
-    """创建TRPO算法配置"""
-    config = {
-        "algorithm": {
-            "algorithm_class_name": "TRPO",          # 指定使用TRPO算法
-            "num_learning_epochs": 1,                # 每次更新的epoch数
-            "learning_rate": 1e-2,                   # 价值函数学习率
-            "gamma": 0.99,                           # 折扣因子
-            "lam": 0.95,                             # GAE参数
-            "kl_constraint": 0.0005,                 # KL散度约束
-            "alpha": 0.5                             # 线性搜索参数
-        },
-        "policy": {
-            "policy_class_name": "ActorCritic",     # 使用现有的ActorCritic
-            "actor_hidden_dims": [64, 64],          # actor网络隐藏层
-            "critic_hidden_dims": [64, 64],         # critic网络隐藏层
-            "activation": "elu",
-            "init_noise_std": 1.0
-        },
-        "runner": {
-            "experiment_name": "trpo_cartpole",
-            "num_steps_per_env": 100,               # 每个环境收集的步数
-            "save_interval": 50
-        }
-    }
-    return config
 
 def trpo_example():
-    """
-    TRPO算法完整示例
-    展示如何使用TRPO进行稳定的policy optimization
-    """
+    """TRPO 算法完整示例（模拟 Pendulum 连续动作任务）。"""
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    # 创建配置
-    config = create_trpo_config()
+    # ── 环境参数 ────────────────────────────────────────────────────────────
+    num_envs    = 4
+    num_obs     = 3   # Pendulum: [cos θ, sin θ, θ̇]
+    num_actions = 1   # 连续力矩控制
+    rollout_len = 128  # 每次收集的步数
 
-    # 模拟环境参数 (CartPole示例)
-    num_envs = 4
-    num_obs = 4  # CartPole observation space
-    num_actions = 2  # CartPole action space
-    num_privileged_obs = None
-
-    # 创建策略网络
-    actor_critic = ActorCritic(
+    # ── 创建 TRPOPolicy（内部构建策略网络与价值网络）──────────────────────
+    policy = TRPOPolicy(
         num_obs=num_obs,
-        num_critic_obs=num_obs,  # TRPO需要critic
         num_actions=num_actions,
-        **config["policy"]
-    ).to(device)
-
-    # 创建TRPO算法
-    trpo_alg = TRPO(
-        actor_critic=actor_critic,
+        num_learning_epochs=1,
+        num_mini_batches=1,
+        gamma=0.99,
+        tau=0.97,
+        max_kl=0.05,       # KL 约束
+        damping=0.1,       # Fisher 信息矩阵阻尼
+        l2_reg=1e-4,
+        vf_lr=1e-2,        # 价值函数学习率
+        vf_iters=20,       # 价值函数迭代次数
+        action_bounds=(-2.0, 2.0),  # Pendulum 动作范围
         device=device,
-        **config["algorithm"]
     )
 
-    # 创建存储器 (on-policy)
-    storage = RolloutStorage(
+    # ── 初始化存储器 ─────────────────────────────────────────────────────────
+    policy.init_storage(
         num_envs=num_envs,
-        num_transitions_per_env=config["runner"]["num_steps_per_env"],
-        obs_shape=[num_obs],
-        privileged_obs_shape=[num_privileged_obs] if num_privileged_obs else [None],
-        actions_shape=[num_actions],
-        device=device
+        num_transitions_per_env=rollout_len,
+        actor_obs_shape=(num_obs,),
+        critic_obs_shape=(num_obs,),
+        action_shape=(num_actions,),
     )
+    policy.train_mode()
 
-    print("开始TRPO训练...")
+    print("开始 TRPO 训练...")
     print(f"设备: {device}")
     print(f"环境数量: {num_envs}")
-    print(f"每次迭代步数: {config['runner']['num_steps_per_env']}")
-    print(f"KL约束: {config['algorithm']['kl_constraint']}")
+    print(f"每次收集步数: {rollout_len}")
+    print(f"KL 约束: {policy.max_kl}")
 
-    # 训练循环示例
-    for iteration in range(10):
-        print(f"\n=== 迭代 {iteration + 1} ===")
+    # ── 训练循环 ─────────────────────────────────────────────────────────────
+    obs = torch.randn(num_envs, num_obs, device=device)
 
-        # 1. 数据收集阶段 (这里用随机数据模拟)
-        collect_transitions(storage, num_envs, num_obs, num_actions, device, trpo_alg)
+    for iteration in range(5):
+        # 1. 收集 rollout（on-policy）
+        for _ in range(rollout_len):
+            actions = policy.act(obs)
+            next_obs = torch.randn(num_envs, num_obs, device=device)  # 模拟下一状态
+            rewards  = -torch.sum(obs ** 2, dim=-1)  # 模拟 Pendulum 奖励（负二阶矩）
+            dones    = torch.zeros(num_envs, dtype=torch.bool, device=device)
+            policy.process_env_step(rewards, dones, {})
+            obs = next_obs
 
-        # 2. TRPO更新
-        critic_loss = trpo_alg.update(storage)
-        print(".4f")
+        # 2. 计算 GAE 回报
+        policy.compute_returns(obs)
 
-        # 3. 清理存储 (为下一轮准备)
-        # TRPO是on-policy算法，所以每轮都要重新收集数据
+        # 3. TRPO 更新（价值函数 + 策略网络）
+        value_loss, policy_loss = policy.update()
+        print(f"迭代 {iteration + 1:2d}  |  value_loss={value_loss:.4f}"
+              f"  |  policy_loss={policy_loss:.4f}")
 
-    print("\nTRPO训练完成!")
+        # storage 在 update() 内部已清空，下一轮直接收集
 
-def collect_transitions(storage, num_envs, num_obs, num_actions, device, trpo_alg):
-    """模拟数据收集过程"""
-    # 这里用随机数据模拟实际的环境交互
-    for env_idx in range(num_envs):
-        # 模拟一个episode的数据收集
-        episode_length = np.random.randint(10, 50)  # 随机episode长度
+    print("\nTRPO 训练完成!")
 
-        for step in range(episode_length):
-            # 创建随机观测
-            obs = torch.randn(1, num_obs).to(device)
-
-            # 使用TRPO采样动作
-            actions, action_log_probs = trpo_alg.act(obs.unsqueeze(0))
-
-            # 创建随机奖励和done信号
-            reward = torch.randn(1, 1).to(device)
-            done = torch.tensor([[step == episode_length - 1]], dtype=torch.bool).to(device)
-
-            # 创建transition
-            transition = RolloutStorage.Transition()
-            transition.observations = obs
-            transition.critic_observations = obs  # TRPO使用critic
-            transition.actions = actions.squeeze(0)
-            transition.rewards = reward
-            transition.dones = done
-            transition.actions_log_prob = action_log_probs.squeeze(0)
-            transition.values = torch.zeros_like(reward)  # 将由critic计算
-            transition.action_mean = torch.zeros_like(actions.squeeze(0))
-            transition.action_sigma = torch.zeros_like(actions.squeeze(0))
-            transition.hidden_states = None
-
-            # 添加到存储器
-            storage.add_transitions(transition)
-
-    print(f"收集了 {num_envs * episode_length} 步数据")
 
 if __name__ == "__main__":
     trpo_example()

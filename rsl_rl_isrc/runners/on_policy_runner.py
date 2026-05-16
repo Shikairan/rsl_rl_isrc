@@ -12,20 +12,17 @@ TensorBoard 日志，以及可选的 HTTP 遥测（``socket_send`` / ``StepObsPu
 
 import time
 import os
-import zmq
 from collections import deque
 import statistics
 from torch.utils.tensorboard import SummaryWriter
 import torch
 from multiprocessing import Pool
-import struct
 from rsl_rl_isrc.algorithms import PPO
 from rsl_rl_isrc.modules import ActorCritic, ActorCriticRecurrent
 from rsl_rl_isrc.env import VecEnv
 from rsl_rl_isrc.sockets import send_post_request, StepObsPublisher
 from rsl_rl_isrc.sockets.http_post import _POST_TIMEOUT
 import torch.distributed as dist
-from torch.nn.parallel import DistributedDataParallel as DDP
 
 
 class OnPolicyRunner:
@@ -178,7 +175,6 @@ class OnPolicyRunner:
                 rank_val = int(self.state_tag[0].item()) if torch.is_tensor(self.state_tag[0]) else int(self.state_tag[0])
                 if dist.get_rank() == rank_val:
                     try:
-                        # timeout 与 send_post_request 的 _POST_TIMEOUT 保持一致
                         tmp_state = self.retstate_list[-1].get(timeout=_POST_TIMEOUT + 2) if self.retstate_list else {}
                         if isinstance(tmp_state, dict) and 'error' not in tmp_state:
                             self.state_tag = torch.tensor(tmp_state.get('state', self.state_tag.cpu().tolist()), device=self.device)
@@ -197,13 +193,12 @@ class OnPolicyRunner:
                 else:
                     self.alg.storage.clear()
                     dist.barrier()
-            else:
-                mean_value_loss, mean_surrogate_loss = self.alg.update()
 
-            if dist.is_initialized():
                 for param in self.alg.actor_critic.parameters():
                     dist.broadcast(param.data, src=0)
                 dist.barrier()
+            else:
+                mean_value_loss, mean_surrogate_loss = self.alg.update()
 
             stop = time.time()
             learn_time = stop - start
