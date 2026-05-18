@@ -13,6 +13,6 @@
 """
 
 from rsl_rl_isrc.sockets.http_post import send_post_request, StepObsPublisher
-from rsl_rl_isrc.sockets.obs_server import ObsInstrServer
+from rsl_rl_isrc.sockets.obs_server import ObsInstrServer, default_obs_env_hi
 
-__all__ = ["send_post_request", "StepObsPublisher", "ObsInstrServer"]
+__all__ = ["send_post_request", "StepObsPublisher", "ObsInstrServer", "default_obs_env_hi"]

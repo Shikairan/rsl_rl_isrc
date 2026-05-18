@@ -84,6 +84,9 @@ class OnPolicyRunner:
         self.tot_timesteps = 0
         self.tot_time = 0
         self.current_learning_iteration = 0
+        # 若设置，日志显示 it/_log_iter_denominator（供 G1OnPolicyTestRunner 等）
+        self._log_iter_denominator = None
+        self._log_iter_start = 0
         self.step_obs = StepObsPublisher(self.rank, self.task, self.env.num_envs)
 
         self.env.reset(torch.arange(self.env.num_envs))
@@ -262,7 +265,11 @@ class OnPolicyRunner:
             self.writer.add_scalar('Train/mean_reward/time', statistics.mean(locs['rewbuffer']), self.tot_time)
             self.writer.add_scalar('Train/mean_episode_length/time', statistics.mean(locs['lenbuffer']), self.tot_time)
 
-        str = f" \033[1m Learning iteration {locs['it']}/{self.current_learning_iteration + locs['num_learning_iterations']} \033[0m "
+        if self._log_iter_denominator is not None:
+            iter_total = self._log_iter_denominator
+        else:
+            iter_total = self.current_learning_iteration + locs['num_learning_iterations']
+        str = f" \033[1m Learning iteration {locs['it']}/{iter_total} \033[0m "
 
         if len(locs['rewbuffer']) > 0:
             log_string = (f"""{'#' * width}\n"""
@@ -292,10 +299,19 @@ class OnPolicyRunner:
                        f"""{'Total timesteps:':>{pad}} {self.tot_timesteps}\n"""
                        f"""{'Iteration time:':>{pad}} {iteration_time:.2f}s\n"""
                        f"""{'Total time:':>{pad}} {self.tot_time:.2f}s\n"""
-                       f"""{'ETA:':>{pad}} {self.tot_time / (locs['it'] + 1) * (
-                               locs['num_learning_iterations'] - locs['it']):.1f}s\n""")
+                       f"""{'ETA:':>{pad}} {self._format_eta(locs):.1f}s\n""")
         print(log_string)
 
+    def _format_eta(self, locs) -> float:
+        if self._log_iter_denominator is not None:
+            start_it = self._log_iter_start
+            end_it = start_it + self._log_iter_denominator
+            remaining = max(0, end_it - locs['it'] - 1)
+            steps_done = max(1, locs['it'] - start_it + 1)
+            return self.tot_time / steps_done * remaining
+        return self.tot_time / (locs['it'] + 1) * (
+            locs['num_learning_iterations'] - locs['it']
+        )
 
     def save(self, path, infos=None):
         """保存 ``actor_critic``、优化器状态与当前迭代号到 ``path``（PyTorch ``torch.save``）。"""

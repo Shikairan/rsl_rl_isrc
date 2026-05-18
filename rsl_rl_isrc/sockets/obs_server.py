@@ -65,6 +65,11 @@ _DEFAULT_RELAY_URL      = os.environ.get("RSL_RL_ISRC_OBS_RELAY_URL", "").strip(
 _DEFAULT_RELAY_TIMEOUT  = float(os.environ.get("RSL_RL_ISRC_OBS_RELAY_TIMEOUT", "2"))
 
 
+def default_obs_env_hi(num_envs: int) -> int:
+    """默认 obs 切片上界：``min(64, num_envs)``。"""
+    return min(64, max(1, int(num_envs)))
+
+
 class ObsInstrServer:
     """与 Runner 同生命周期的本地 ZMQ obs 服务端与指令管理器。
 
@@ -98,6 +103,7 @@ class ObsInstrServer:
         ctrl_rep_port: Optional[int] = None,
         relay_url: str = _DEFAULT_RELAY_URL,
         relay_timeout: float = _DEFAULT_RELAY_TIMEOUT,
+        print_obs: Optional[bool] = None,
     ):
         """
         参数
@@ -116,6 +122,8 @@ class ObsInstrServer:
             obs HTTP 中继目标 URL。为空则不中继。
         relay_timeout : float
             HTTP 中继超时（秒）。
+        print_obs : bool, optional
+            是否在收到 obs 时打印摘要；默认读 ``RSL_RL_ISRC_OBS_PRINT``（0/1）。
         """
         self._init_rank     = int(rank)
         self._task          = task
@@ -124,11 +132,20 @@ class ObsInstrServer:
         self._ctrl_rep_port = ctrl_rep_port or _DEFAULT_CTRL_REP_PORT
         self._relay_url     = relay_url.strip()
         self._relay_timeout = relay_timeout
+        if print_obs is None:
+            print_obs = os.environ.get("RSL_RL_ISRC_OBS_PRINT", "0").strip() in (
+                "1",
+                "true",
+                "yes",
+            )
+        self._print_obs = bool(print_obs)
+        self._obs_print_count = 0
 
         # 指令张量：[sender_rank, aux, env_start, env_end]
         # 与绑定的 StepObsPublisher 共享同一对象（广播后自动更新）
+        _env_hi = default_obs_env_hi(self._num_envs)
         self._instr: torch.Tensor = torch.tensor(
-            [0, 0, 0, self._num_envs], dtype=torch.int64
+            [0, 0, 0, _env_hi], dtype=torch.int64
         )
         self._instr_lock    = threading.Lock()
         self._instr_changed = threading.Event()   # rank 0 专用标志
@@ -271,12 +288,26 @@ class ObsInstrServer:
         try:
             raw  = sock.recv(zmq.NOBLOCK)
             msg  = json.loads(raw.decode("utf-8"))
+            if self._print_obs:
+                self._print_obs_summary(msg)
             if self._relay_url:
                 self._http_relay(msg)
         except zmq.Again:
             pass
         except (json.JSONDecodeError, Exception):
             pass
+
+    def _print_obs_summary(self, msg: dict) -> None:
+        """打印 obs 消息摘要（不输出完整向量）。"""
+        self._obs_print_count += 1
+        obs = msg.get("obs", [])
+        n_envs = len(obs) if isinstance(obs, list) else 0
+        obs_dim = len(obs[0]) if n_envs and isinstance(obs[0], list) else 0
+        print(
+            f"[obs #{self._obs_print_count}] type={msg.get('type')} "
+            f"rank={msg.get('rank')} task={msg.get('task')} "
+            f"instruction={msg.get('instruction')} obs_shape=({n_envs}, {obs_dim})"
+        )
 
     def _handle_ctrl(self, sock: zmq.Socket) -> None:
         """从 REP socket 读取指令更新请求，更新 ``_instr`` 并回复 ok/error。"""
