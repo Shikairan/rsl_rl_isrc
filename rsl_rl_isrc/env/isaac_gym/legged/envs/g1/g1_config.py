@@ -4,19 +4,19 @@ class G1RoughCfg( LeggedRobotCfg ):
     class init_state( LeggedRobotCfg.init_state ):
         pos = [0.0, 0.0, 0.8] # x,y,z [m]
         default_joint_angles = { # = target angles [rad] when action = 0.0
-           'left_hip_yaw_joint' : 0. ,   
-           'left_hip_roll_joint' : 0,               
-           'left_hip_pitch_joint' : -0.1,         
-           'left_knee_joint' : 0.3,       
-           'left_ankle_pitch_joint' : -0.2,     
-           'left_ankle_roll_joint' : 0,     
-           'right_hip_yaw_joint' : 0., 
-           'right_hip_roll_joint' : 0, 
-           'right_hip_pitch_joint' : -0.1,                                       
-           'right_knee_joint' : 0.3,                                             
-           'right_ankle_pitch_joint': -0.2,                              
-           'right_ankle_roll_joint' : 0,       
-           'torso_joint' : 0.
+           'left_hip_yaw_joint'        : 0.0,
+           'left_hip_roll_joint'       : 0.0,
+           'left_hip_pitch_joint'      : -0.1,
+           'left_knee_joint'           : 0.3,
+           'left_ankle_pitch_joint'    : -0.2,
+           'left_ankle_roll_joint'     : 0.0,
+           'right_hip_yaw_joint'       : 0.0,
+           'right_hip_roll_joint'      : 0.0,
+           'right_hip_pitch_joint'     : -0.1,
+           'right_knee_joint'          : 0.3,
+           'right_ankle_pitch_joint'   : -0.2,
+           'right_ankle_roll_joint'    : 0.0,
+           # 注：12-DOF 机器人不含 torso_joint，已移除
         }
     
     class env(LeggedRobotCfg.env):
@@ -111,7 +111,7 @@ class G1RoughCfgPPO( LeggedRobotCfgPPO ):
         run_name = ''
         experiment_name = 'g1'
         resume = False
-        load_run = "/home/data/rl/ppo/pymotrisim_3_mujoco/unitree_rl_gym/logs/g1/Nov30_08-39-02_/"#-1 # -1 = last run
-        checkpoint =  35000 # -1 = last saved model
+        load_run = -1        # -1 = 最近一次运行
+        checkpoint = -1      # -1 = 最新 model_*.pt
         resume_path = None
   
