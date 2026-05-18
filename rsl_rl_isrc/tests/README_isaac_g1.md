@@ -4,7 +4,7 @@
 
 - NVIDIA Isaac Gym（Preview）已安装并可 `import isaacgym`
 - CUDA GPU（`cuda:0`）
-- 本仓库 `rsl_rl_isrc/robotmodel/g1_description`（`g1_12dof.xml`）
+- 本仓库 `rsl_rl_isrc/robotmodel/g1_description`（Isaac 训练默认 `g1_12dof.urdf`，含 `meshes/`）
 
 ## 运行
 

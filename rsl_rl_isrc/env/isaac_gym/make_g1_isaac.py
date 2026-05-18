@@ -118,11 +118,11 @@ def make_g1_isaac_env(
     from rsl_rl_isrc.env.isaac_gym.legged.utils.helpers import parse_sim_params, set_seed
     from rsl_rl_isrc.env.isaac_gym.isaac_g1_vec_env import IsaacG1VecEnv
 
-    from rsl_rl_isrc.env.isaac_gym.legged import ensure_g1_robot_assets
+    from rsl_rl_isrc.env.isaac_gym.legged import ensure_g1_urdf
 
     cfg = G1RoughCfg()
     cfg.env.num_envs = int(num_envs)
-    cfg.asset.file = ensure_g1_robot_assets()
+    cfg.asset.file = ensure_g1_urdf()
 
     train_cfg = build_g1_ppo_train_cfg()
     set_seed(train_cfg.get("seed", 1))

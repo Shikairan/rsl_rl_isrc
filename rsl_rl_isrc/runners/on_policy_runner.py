@@ -13,6 +13,7 @@ TensorBoard 日志，以及可选的 HTTP 遥测（``socket_send`` / ``StepObsPu
 import time
 import os
 from collections import deque
+from typing import Callable, Optional
 import statistics
 from torch.utils.tensorboard import SummaryWriter
 import torch
@@ -121,12 +122,18 @@ class OnPolicyRunner:
         except Exception:
             pass
  
-    def learn(self, num_learning_iterations, init_at_random_ep_len=False):
+    def learn(
+        self,
+        num_learning_iterations,
+        init_at_random_ep_len=False,
+        pre_iter_callback: Optional[Callable[[int], None]] = None,
+    ):
         """主训练循环：多轮 ``num_steps_per_env`` 采集、回报计算、分布式存储同步、rank0 上 ``PPO.update``。
 
         参数:
             num_learning_iterations: 追加的外层迭代次数（在 ``current_learning_iteration`` 基础上递增）。
             init_at_random_ep_len: 若为 True，在首轮随机化各并行环境的剩余回合长度（探索起点多样性）。
+            pre_iter_callback: 可选；每轮学习迭代开始前调用 ``callback(it)``（如 ZMQ ``sync_instr``）。
 
         分布式约定:
             每轮结束由 ``state_tag[0]`` 指定 rank 取回 HTTP 异步结果并广播 ``state_tag``；
@@ -153,6 +160,8 @@ class OnPolicyRunner:
                 dist.broadcast(param.data, src=0)
             dist.barrier()
         for it in range(self.current_learning_iteration, tot_iter):
+            if pre_iter_callback is not None:
+                pre_iter_callback(it)
             start = time.time()
             # Rollout
             reslist = []

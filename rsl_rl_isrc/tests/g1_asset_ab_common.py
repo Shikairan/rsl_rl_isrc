@@ -15,20 +15,11 @@ _PACKAGE_ROOT = os.path.dirname(_SCRIPT_DIR)
 _PROJECT_ROOT = os.path.dirname(_PACKAGE_ROOT)
 
 # 与 legged/__init__.py 一致的路径常量（不 import rsl_rl，避免先于 isaacgym 拉入 torch）
-_LEGGED_PKG = os.path.join(_PACKAGE_ROOT, "env", "isaac_gym", "legged")
-_ENV_DIR = os.path.abspath(os.path.join(_LEGGED_PKG, "..", ".."))
-_RSL_RL_ISRC_ROOT = os.path.abspath(os.path.join(_ENV_DIR, ".."))
-LEGGED_GYM_ROOT_DIR = os.path.join(_ENV_DIR, "unitree_rl_gym")
+_RSL_RL_ISRC_ROOT = _PACKAGE_ROOT
 G1_DESCRIPTION_DIR = os.path.join(_RSL_RL_ISRC_ROOT, "robotmodel", "g1_description")
 G1_XML_PATH = os.path.join(G1_DESCRIPTION_DIR, "g1_12dof.xml")
-G1_URDF_ROBOTMODEL = os.path.join(G1_DESCRIPTION_DIR, "g1_12dof.urdf")
-G1_URDF_UNITREE = os.path.join(
-    LEGGED_GYM_ROOT_DIR,
-    "resources",
-    "robots",
-    "g1_description",
-    "g1_12dof.urdf",
-)
+G1_URDF_PATH = os.path.join(G1_DESCRIPTION_DIR, "g1_12dof.urdf")
+G1_MESH_DIR = os.path.join(G1_DESCRIPTION_DIR, "meshes")
 
 
 def ensure_project_on_path() -> None:
@@ -62,14 +53,11 @@ def check_isaac_cuda() -> None:
 
 
 def _ensure_g1_meshes() -> None:
-    """与 ensure_g1_robot_assets 相同的 mesh 回退（不 import torch）。"""
-    mesh_dir = os.path.join(G1_DESCRIPTION_DIR, "meshes")
-    if not os.path.isdir(mesh_dir):
-        fallback = os.path.join(
-            LEGGED_GYM_ROOT_DIR, "resources", "robots", "g1_description", "meshes"
+    if not os.path.isdir(G1_MESH_DIR):
+        raise FileNotFoundError(
+            f"缺少 mesh 目录: {G1_MESH_DIR}\n"
+            "请将 g1_description 的 meshes（*.STL）放入该目录。"
         )
-        if os.path.isdir(fallback):
-            os.symlink(fallback, mesh_dir)
 
 
 def get_g1_asset_paths(*, setup_meshes: bool = False) -> dict[str, str]:
@@ -79,8 +67,7 @@ def get_g1_asset_paths(*, setup_meshes: bool = False) -> dict[str, str]:
     return {
         "xml_robotmodel": G1_XML_PATH,
         "xml_current": G1_XML_PATH,
-        "urdf_robotmodel": G1_URDF_ROBOTMODEL,
-        "urdf_unitree": G1_URDF_UNITREE,
+        "urdf_robotmodel": G1_URDF_PATH,
     }
 
 
@@ -95,14 +82,9 @@ def resolve_asset_file(kind: AssetKind, *, setup_meshes: bool = True) -> str:
         return paths["xml_current"]
     if kind == "urdf":
         p = paths["urdf_robotmodel"]
-        if os.path.isfile(p):
-            return p
-        p = paths["urdf_unitree"]
-        if os.path.isfile(p):
-            return p
-        raise FileNotFoundError(
-            "未找到 g1_12dof.urdf（robotmodel 与 unitree_rl_gym 均无）"
-        )
+        if not os.path.isfile(p):
+            raise FileNotFoundError(p)
+        return p
     raise ValueError(f"未知 asset kind: {kind}")
 
 
@@ -114,7 +96,7 @@ def make_g1_env_with_asset(
     sim_device: str = "cuda:0",
     seed: int | None = None,
 ):
-    """创建 G1 环境；asset_kind 覆盖 make_g1_isaac 里强制的 xml。"""
+    """创建 G1 环境；asset_kind 指定 robotmodel 下 urdf 或 xml。"""
     from types import SimpleNamespace
 
     from rsl_rl_isrc.env.isaac_gym.make_g1_isaac import (

@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 """Isaac Gym G1 + G1OnPolicyTestRunner 正式 PPO 训练（单进程，无 torch.distributed）。
 
-依赖：已安装 Isaac Gym、CUDA；仿真在 ``rsl_rl_isrc.env.isaac_gym.legged``（参考 unitree_rl_gym 移植）。
+``G1OnPolicyTestRunner`` 使用单次 ``learn(N)``（每 iter 前 ``sync_instr``），与 LSTM PPO 兼容。
+
+依赖：已安装 Isaac Gym、CUDA；物理模型为 ``robotmodel/g1_description/g1_12dof.urdf``；
+仿真在 ``rsl_rl_isrc.env.isaac_gym.legged``。
 
 运行::
 

@@ -15,6 +15,7 @@ class G1OnPolicyTestRunner(OnPolicyRunner):
     - ``StepObsPublisher.push(obs)`` 在父类 ``learn`` 的 rollout 中调用
     - 绑定后 publisher 与 server 共享 ``_instr`` 张量
     - 测试可通过 :meth:`set_instruction` 或 ZMQ REP 更新切片指令
+    - 单次 ``super().learn(N)``（非 ``learn(1)`` 套娃），与 LSTM PPO 兼容
     """
 
     def __init__(
@@ -48,19 +49,21 @@ class G1OnPolicyTestRunner(OnPolicyRunner):
         self._log_iter_denominator = int(num_learning_iterations)
         self._log_iter_start = int(self.current_learning_iteration)
         try:
-            for i in range(num_learning_iterations):
-                if self.obs_server is not None:
-                    self.obs_server.sync_instr()
-                super().learn(
-                    1,
-                    init_at_random_ep_len=(init_at_random_ep_len and i == 0),
-                )
+            super().learn(
+                num_learning_iterations,
+                init_at_random_ep_len=init_at_random_ep_len,
+                pre_iter_callback=self._pre_iter_sync_instr,
+            )
         finally:
             self._log_iter_denominator = None
             self._log_iter_start = 0
             if self.obs_server is not None:
                 self.obs_server.stop()
                 self.obs_server = None
+
+    def _pre_iter_sync_instr(self, it: int) -> None:
+        if self.obs_server is not None:
+            self.obs_server.sync_instr()
 
     def set_instruction(self, instr: list) -> bool:
         """测试辅助：直接更新 obs 切片指令 ``[rank, aux, env_lo, env_hi)``。"""

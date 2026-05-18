@@ -1,4 +1,4 @@
-from rsl_rl_isrc.env.isaac_gym.legged import LEGGED_GYM_ROOT_DIR
+from rsl_rl_isrc.env.isaac_gym.legged import G1_DESCRIPTION_DIR
 import time
 from warnings import WarningMessage
 import numpy as np
@@ -11,7 +11,7 @@ import torch
 from torch import Tensor
 from typing import Tuple, Dict
 
-from rsl_rl_isrc.env.isaac_gym.legged import LEGGED_GYM_ROOT_DIR
+from rsl_rl_isrc.env.isaac_gym.legged import G1_DESCRIPTION_DIR
 from rsl_rl_isrc.env.isaac_gym.legged.envs.base.base_task import BaseTask
 from rsl_rl_isrc.env.isaac_gym.legged.utils.math import wrap_to_pi
 from rsl_rl_isrc.env.isaac_gym.legged.utils.isaacgym_utils import get_euler_xyz as get_euler_xyz_in_tensor
@@ -261,19 +261,6 @@ class LeggedRobot(BaseTask):
                 r = self.dof_pos_limits[i, 1] - self.dof_pos_limits[i, 0]
                 self.dof_pos_limits[i, 0] = m - 0.5 * r * self.cfg.rewards.soft_dof_pos_limit
                 self.dof_pos_limits[i, 1] = m + 0.5 * r * self.cfg.rewards.soft_dof_pos_limit
-
-            # 防御：MJCF actuator 无 forcerange 时 Isaac Gym 返回 effort=0，
-            # 导致所有力矩被裁剪为 0 → 机器人无法受控。
-            # 遇到全零 torque_limits 时给出明确警告，防止无声失败。
-            zero_mask = self.torque_limits == 0.0
-            if zero_mask.any():
-                zero_joints = [self.dof_names[i] for i in range(self.num_dofs) if zero_mask[i]]
-                print(
-                    f"[WARNING] torque_limits 为 0 的关节: {zero_joints}\n"
-                    f"  MJCF actuator 缺少 forcerange 属性时 Isaac Gym 会返回 effort=0，"
-                    f"导致 _compute_torques 输出全为 0（机器人无法受控）。\n"
-                    f"  请为 MJCF 的 <motor> 添加 forcerange=\"-X X\"，或改用 URDF 格式。"
-                )
         return props
 
     def _process_rigid_body_props(self, props, env_id):
@@ -539,7 +526,7 @@ class LeggedRobot(BaseTask):
                 2.3 create actor with these properties and add them to the env
              3. Store indices of different bodies of the robot
         """
-        asset_path = self.cfg.asset.file.format(LEGGED_GYM_ROOT_DIR=LEGGED_GYM_ROOT_DIR)
+        asset_path = self.cfg.asset.file.format(G1_DESCRIPTION_DIR=G1_DESCRIPTION_DIR)
         asset_root = os.path.dirname(asset_path)
         asset_file = os.path.basename(asset_path)
 

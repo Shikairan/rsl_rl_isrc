@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""Isaac Gym G1 PPO 训练（unitree URDF 物理模型，单进程）。
+"""Isaac Gym G1 PPO 训练（robotmodel URDF，单进程）。
 
-与 ``test_ppo_g1_isaac.py`` 行为一致，但固定加载::
+与 ``test_ppo_g1_isaac.py`` 相同管线（``make_g1_isaac_env`` + ``G1OnPolicyTestRunner``），
+物理模型固定为::
 
-    rsl_rl_isrc/env/unitree_rl_gym/resources/robots/g1_description/g1_12dof.urdf
+    rsl_rl_isrc/robotmodel/g1_description/g1_12dof.urdf
 
-不调用 ``make_g1_isaac_env()``（避免 ``ensure_g1_robot_assets()`` 强制 XML）。
+（文件名保留历史用途；不再依赖 ``env/unitree_rl_gym``。）
 
 运行::
 
@@ -22,23 +23,12 @@ import argparse
 import importlib.util
 import os
 import sys
-from typing import Tuple
 
 script_dir = os.path.dirname(os.path.abspath(__file__))
 package_root = os.path.dirname(script_dir)
 project_root = os.path.dirname(package_root)
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
-
-UNITREE_G1_URDF = os.path.join(
-    package_root,
-    "env",
-    "unitree_rl_gym",
-    "resources",
-    "robots",
-    "g1_description",
-    "g1_12dof.urdf",
-)
 
 
 def _apply_numpy_isaac_compat() -> None:
@@ -47,7 +37,7 @@ def _apply_numpy_isaac_compat() -> None:
         package_root, "env", "isaac_gym", "numpy_compat.py"
     )
     spec = importlib.util.spec_from_file_location(
-        "_isaac_numpy_compat_unitree_urdf", compat_path
+        "_isaac_numpy_compat_robotmodel_urdf", compat_path
     )
     if spec is None or spec.loader is None:
         raise ImportError(f"无法加载: {compat_path}")
@@ -71,56 +61,6 @@ def _check_isaac_cuda() -> None:
         sys.exit(1)
 
 
-def _assert_unitree_urdf_exists() -> str:
-    path = os.path.abspath(UNITREE_G1_URDF)
-    if not os.path.isfile(path):
-        print(f"错误: 未找到 unitree URDF: {path}", file=sys.stderr)
-        sys.exit(1)
-    return path
-
-
-def make_g1_env_unitree_urdf(
-    num_envs: int = 64,
-    headless: bool = True,
-    sim_device: str = "cuda:0",
-) -> Tuple[object, object, dict]:
-    """创建 G1 环境，``cfg.asset.file`` 固定为 unitree ``g1_12dof.urdf``。"""
-    from rsl_rl_isrc.env.isaac_gym.make_g1_isaac import (
-        _class_to_dict,
-        _import_isaac,
-        _make_sim_args,
-        build_g1_ppo_train_cfg,
-    )
-    from rsl_rl_isrc.env.isaac_gym.legged.envs.g1.g1_config import G1RoughCfg
-    from rsl_rl_isrc.env.isaac_gym.legged.envs.g1.g1_env import G1Robot
-    from rsl_rl_isrc.env.isaac_gym.legged.utils.helpers import parse_sim_params, set_seed
-    from rsl_rl_isrc.env.isaac_gym.isaac_g1_vec_env import IsaacG1VecEnv
-
-    asset_path = _assert_unitree_urdf_exists()
-    gymapi = _import_isaac()
-
-    cfg = G1RoughCfg()
-    cfg.env.num_envs = int(num_envs)
-    cfg.asset.file = asset_path
-
-    train_cfg = build_g1_ppo_train_cfg()
-    train_cfg["runner"]["run_name"] = "unitree_urdf"
-    set_seed(train_cfg.get("seed", 1))
-
-    args = _make_sim_args(sim_device, headless, gymapi)
-    sim_params = parse_sim_params(args, {"sim": _class_to_dict(cfg.sim)})
-
-    robot = G1Robot(
-        cfg=cfg,
-        sim_params=sim_params,
-        physics_engine=args.physics_engine,
-        sim_device=sim_device,
-        headless=headless,
-    )
-    env = IsaacG1VecEnv(robot)
-    return env, cfg, train_cfg
-
-
 def run_g1_isaac_training(
     num_envs: int,
     max_iterations: int,
@@ -137,17 +77,21 @@ def run_g1_isaac_training(
     ctrl_rep_port: int = 15556,
     print_obs: bool = False,
 ) -> None:
-    """使用 unitree URDF 的 Isaac G1 环境与 G1OnPolicyTestRunner 进行 PPO 训练。"""
+    """使用 robotmodel URDF 的 Isaac G1 环境与 G1OnPolicyTestRunner 进行 PPO 训练。"""
     _check_isaac_cuda()
 
-    from rsl_rl_isrc.env.isaac_gym.make_g1_isaac import default_g1_log_dir
+    from rsl_rl_isrc.env.isaac_gym.make_g1_isaac import (
+        default_g1_log_dir,
+        make_g1_isaac_env,
+    )
     from rsl_rl_isrc.env.isaac_gym.test_runner import G1OnPolicyTestRunner
 
-    env, cfg, train_cfg = make_g1_env_unitree_urdf(
+    env, cfg, train_cfg = make_g1_isaac_env(
         num_envs=num_envs,
         headless=headless,
         sim_device=device,
     )
+    train_cfg["runner"]["run_name"] = "robotmodel_urdf"
     print(f"asset.file = {cfg.asset.file}")
 
     train_cfg["runner"]["max_iterations"] = max_iterations
@@ -200,7 +144,7 @@ def run_g1_isaac_training(
         runner.load(resume_path)
 
     print(
-        f"开始训练 (unitree URDF): num_envs={num_envs}, max_iterations={max_iterations}, "
+        f"开始训练 (robotmodel URDF): num_envs={num_envs}, max_iterations={max_iterations}, "
         f"log_dir={log_dir}, device={device}"
     )
     runner.learn(max_iterations, init_at_random_ep_len=init_at_random_ep_len)
@@ -209,7 +153,7 @@ def run_g1_isaac_training(
 def _parse_args() -> argparse.Namespace:
     default_num_envs = int(os.environ.get("G1_NUM_ENVS", "4096"))
     parser = argparse.ArgumentParser(
-        description="G1 Isaac Gym PPO（unitree g1_12dof.urdf + G1OnPolicyTestRunner）"
+        description="G1 Isaac Gym PPO（robotmodel g1_12dof.urdf + G1OnPolicyTestRunner）"
     )
     parser.add_argument(
         "--num-envs",
@@ -227,7 +171,7 @@ def _parse_args() -> argparse.Namespace:
         "--log-dir",
         type=str,
         default=None,
-        help="TensorBoard / checkpoint 目录；默认 logs/g1/<timestamp>_unitree_urdf",
+        help="TensorBoard / checkpoint 目录；默认 logs/g1/<timestamp>_robotmodel_urdf",
     )
     parser.add_argument(
         "--log-root",

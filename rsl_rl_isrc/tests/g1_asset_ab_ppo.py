@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """A/B：同一 PPO 配置下 URDF vs XML 短训，对比 TensorBoard mean_reward。
 
-不修改 ``make_g1_isaac`` / ``test_ppo_g1_isaac``；使用标准 ``OnPolicyRunner``（无 ObsInstr、无 learn(1) 套娃）。
+不修改 ``make_g1_isaac`` / ``test_ppo_g1_isaac``；``plain`` 为 ``OnPolicyRunner``，``test`` 为 ``G1OnPolicyTestRunner``（含 ZMQ sync_instr）。
 
 运行::
 
     python rsl_rl_isrc/tests/g1_asset_ab_ppo.py --num-envs 64 --max-iterations 200
     python rsl_rl_isrc/tests/g1_asset_ab_ppo.py --assets urdf xml --seed 1 --log-root /tmp/g1_ab
 
-可选：仅验证 learn(1) 是否影响结果（固定 URDF）::
+可选：对比 plain vs G1OnPolicyTestRunner（固定 URDF）::
 
     python rsl_rl_isrc/tests/g1_asset_ab_ppo.py --runner-modes plain,test --assets urdf --max-iterations 100
 """
@@ -150,7 +150,7 @@ def main() -> None:
         "--runner-modes",
         type=str,
         default="plain",
-        help="plain=OnPolicyRunner.learn(N); test=G1OnPolicyTestRunner learn(1)xN",
+        help="plain=OnPolicyRunner; test=G1OnPolicyTestRunner（ObsInstr + sync_instr）",
     )
     parser.add_argument("--num-envs", type=int, default=64)
     parser.add_argument("--max-iterations", type=int, default=200)
