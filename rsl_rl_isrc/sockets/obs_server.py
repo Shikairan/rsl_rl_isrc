@@ -13,8 +13,8 @@
     │   └── sync_instr()           │       ← 接收各 rank 推来的 obs 数据
     │       (dist.broadcast)       ├── REP  socket (ctrl_rep_port)
     │                              │       ← 接收外部控制器的指令更新
-    └── StepObsPublisher           └── 可选 HTTP 中继
-        └── push()                         → 将 obs 转发到远端
+    └── StepObsPublisher           └── 可选 HTTP 中继（仅 base_pos/quat/dof 行）
+        └── push()                         → ZMQ 完整 obs_step；HTTP 为位姿 list
             └── ZMQ PUSH ──────────────────────────▲
 
 指令同步流程
@@ -48,7 +48,7 @@ import json
 import os
 import threading
 import time
-from typing import Optional, TYPE_CHECKING
+from typing import Any, List, Optional, TYPE_CHECKING
 
 import requests
 import torch
@@ -68,6 +68,39 @@ _DEFAULT_RELAY_TIMEOUT  = float(os.environ.get("RSL_RL_ISRC_OBS_RELAY_TIMEOUT", 
 def default_obs_env_hi(num_envs: int) -> int:
     """默认 obs 切片上界：``min(64, num_envs)``。"""
     return min(64, max(1, int(num_envs)))
+
+
+def _list_row_at(field: Any, index: int) -> list:
+    """取某字段第 ``index`` 个 env 的行；字段缺失、非 list 或下标越界则返回 ``[]``。"""
+    if not isinstance(field, list) or index < 0 or index >= len(field):
+        return []
+    row = field[index]
+    return row if isinstance(row, list) else []
+
+
+def robot_pose_rows_from_msg(msg: dict) -> List[List[list]]:
+    """将 ``obs_step`` 消息转为 HTTP 对外格式：每 env 为 ``[base_pos, base_quat, dof_pos]``。
+
+    结构示例::
+
+        [
+          [[x, y, z], [qx, qy, qz, qw], [dof...]],
+          ...
+        ]
+
+    某一字段整条缺失或不是 list 时，该 env 对应槽位为 ``[]``。
+    """
+    pos = msg.get("base_pos")
+    quat = msg.get("base_quat")
+    dof = msg.get("dof_pos")
+    n_envs = 0
+    for field in (pos, quat, dof, msg.get("obs")):
+        if isinstance(field, list):
+            n_envs = max(n_envs, len(field))
+    return [
+        [_list_row_at(pos, i), _list_row_at(quat, i), _list_row_at(dof, i)]
+        for i in range(n_envs)
+    ]
 
 
 class ObsInstrServer:
@@ -227,7 +260,7 @@ class ObsInstrServer:
     # 与 StepObsPublisher 的绑定
     # ──────────────────────────────────────────────────────────────────────────
 
-    def bind_publisher(self, publisher: StepObsPublisher) -> None:
+    def bind_publisher(self, publisher: StepObsPublisher, env=None) -> None:
         """将 ``StepObsPublisher`` 与本 Server 关联。
 
         绑定后：
@@ -242,6 +275,8 @@ class ObsInstrServer:
             host="localhost",
             port=self._obs_pull_port,
         )
+        if env is not None:
+            publisher.set_env(env)
 
     # ──────────────────────────────────────────────────────────────────────────
     # 服务端主循环（后台线程，仅 rank 0 运行）
@@ -303,10 +338,15 @@ class ObsInstrServer:
         obs = msg.get("obs", [])
         n_envs = len(obs) if isinstance(obs, list) else 0
         obs_dim = len(obs[0]) if n_envs and isinstance(obs[0], list) else 0
+        extra = ""
+        for key in ("base_pos", "base_quat", "dof_pos"):
+            data = msg.get(key)
+            if isinstance(data, list) and data and isinstance(data[0], list):
+                extra += f" {key}_shape=({len(data)}, {len(data[0])})"
         print(
             f"[obs #{self._obs_print_count}] type={msg.get('type')} "
             f"rank={msg.get('rank')} task={msg.get('task')} "
-            f"instruction={msg.get('instruction')} obs_shape=({n_envs}, {obs_dim})"
+            f"instruction={msg.get('instruction')} obs_shape=({n_envs}, {obs_dim}){extra}"
         )
 
     def _handle_ctrl(self, sock: zmq.Socket) -> None:
@@ -359,11 +399,12 @@ class ObsInstrServer:
         return True
 
     def _http_relay(self, msg: dict) -> None:
-        """将 obs 消息中继到远端 HTTP（异步容错，失败静默处理）。"""
+        """将机器人位姿/关节行中继到 HTTP（仅 ``[base_pos, base_quat, dof_pos]`` 三层 list）。"""
         try:
+            payload = robot_pose_rows_from_msg(msg)
             requests.post(
                 self._relay_url,
-                json=msg,
+                json=payload,
                 headers={"Content-Type": "application/json"},
                 timeout=self._relay_timeout,
             )

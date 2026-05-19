@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """测试用 HTTP POST 接收服务，默认 ``http://0.0.0.0:18888/post``。
 
-用于接收：
+用于接收训练遥测（唯一推荐通路）：
 
-- ``ObsInstrServer`` 中继：设置 ``RSL_RL_ISRC_OBS_RELAY_URL=http://<host>:18888/post``
-- ``send_post_request``：设置 ``RSL_RL_ISRC_POST_URL=http://<host>:18888/post``
+- ``ObsInstrServer`` HTTP 中继：设置 ``RSL_RL_ISRC_OBS_RELAY_URL=http://<host>:18888/post``
+  （body 为 ``[[base_pos, base_quat, dof_pos], ...]`` 每 env 一行；ZMQ 仍为完整 ``obs_step``）
+
+独立脚本仍可使用 ``send_post_request`` + ``RSL_RL_ISRC_POST_URL``（``type=data``），Runner 不调用。
 
 用法::
 
@@ -52,16 +54,74 @@ def _format_row(row: Any, max_elems: int) -> str:
     return json.dumps(head, ensure_ascii=False) + f" ... (+{n - max_elems})"
 
 
-def _summarize_body(body: dict) -> str:
+def _is_robot_pose_payload(body: Any) -> bool:
+    """HTTP relay 体：``[[base_pos, base_quat, dof_pos], ...]``（每 env 一行长度为 3）。"""
+    if not isinstance(body, list):
+        return False
+    if not body:
+        return True
+    row = body[0]
+    return isinstance(row, list) and len(row) == 3
+
+
+def _summarize_robot_pose_rows(rows: Any) -> str:
+    if not isinstance(rows, list):
+        return f"robot_pose type={type(rows).__name__}"
+    n = len(rows)
+    if n == 0:
+        return "robot_pose envs=0"
+    sample = rows[0]
+    if isinstance(sample, list) and len(sample) == 3:
+        shapes = (
+            _list_shape(sample[0]),
+            _list_shape(sample[1]),
+            _list_shape(sample[2]),
+        )
+        return f"robot_pose envs={n} sample=[pos{shapes[0]}, quat{shapes[1]}, dof{shapes[2]}]"
+    return f"robot_pose envs={n} (unexpected row layout)"
+
+
+def _print_robot_pose_preview(
+    rows: list,
+    *,
+    max_elems: int,
+    max_env_rows: int,
+) -> None:
+    if not isinstance(rows, list) or not rows:
+        print("    (empty robot_pose list)")
+        return
+    labels = ("base_pos", "base_quat", "dof_pos")
+    n_show = min(len(rows), max(1, max_env_rows))
+    for i in range(n_show):
+        row = rows[i]
+        if not isinstance(row, list) or len(row) != 3:
+            print(f"    env[{i}] = (invalid row)")
+            continue
+        for label, part in zip(labels, row):
+            print(f"    env[{i}].{label} = {_format_row(part, max_elems)}")
+    if len(rows) > n_show:
+        print(f"    ... ({len(rows) - n_show} more env rows omitted)")
+
+
+def _summarize_body(body: Any) -> str:
+    if _is_robot_pose_payload(body):
+        return _summarize_robot_pose_rows(body)
+    if not isinstance(body, dict):
+        return f"body type={type(body).__name__}"
+
     msg_type = body.get("type", "?")
     rank = body.get("rank")
     task = body.get("task")
 
     if msg_type == "obs_step":
         obs = body.get("obs", [])
+        extra = ""
+        for key in ("base_pos", "base_quat", "dof_pos"):
+            if key in body:
+                extra += f" {key}={_list_shape(body.get(key))}"
         return (
             f"type={msg_type} rank={rank} task={task} "
-            f"instruction={body.get('instruction')} obs_shape={_list_shape(obs)}"
+            f"instruction={body.get('instruction')} obs_shape={_list_shape(obs)}{extra}"
         )
 
     if msg_type == "data":
@@ -76,17 +136,28 @@ def _summarize_body(body: dict) -> str:
 
 
 def _print_payload_preview(
-    body: dict,
+    body: Any,
     *,
     max_elems: int,
     max_env_rows: int,
 ) -> None:
     """在摘要行之后打印真实数值（JSON 已为 list，非 Tensor）。"""
+    if _is_robot_pose_payload(body):
+        _print_robot_pose_preview(
+            body,
+            max_elems=max_elems,
+            max_env_rows=max_env_rows,
+        )
+        return
+    if not isinstance(body, dict):
+        print(f"    body = {json.dumps(body, ensure_ascii=False)[:500]}")
+        return
+
     msg_type = body.get("type")
     if msg_type == "obs_step":
-        key = "obs"
+        keys = ["obs", "base_pos", "base_quat", "dof_pos"]
     elif msg_type == "data":
-        key = "tensor"
+        keys = ["tensor"]
     else:
         snippet = json.dumps(body, ensure_ascii=False)
         if len(snippet) > 500:
@@ -94,18 +165,19 @@ def _print_payload_preview(
         print(f"    body = {snippet}")
         return
 
-    data = body.get(key)
-    if not isinstance(data, list) or not data:
-        print(f"    {key} = (empty or not a list)")
-        return
-
-    n_show = min(len(data), max(1, max_env_rows))
-    for i in range(n_show):
-        row = data[i]
-        print(f"    {key}[{i}] = {_format_row(row, max_elems)}")
-
-    if len(data) > n_show:
-        print(f"    ... ({len(data) - n_show} more env rows omitted)")
+    for key in keys:
+        if key not in body:
+            continue
+        data = body.get(key)
+        if not isinstance(data, list) or not data:
+            print(f"    {key} = (empty or not a list)")
+            continue
+        n_show = min(len(data), max(1, max_env_rows))
+        for i in range(n_show):
+            row = data[i]
+            print(f"    {key}[{i}] = {_format_row(row, max_elems)}")
+        if len(data) > n_show:
+            print(f"    ... ({key}: {len(data) - n_show} more env rows omitted)")
 
 
 class PostHandler(BaseHTTPRequestHandler):
@@ -178,8 +250,7 @@ def run_server(
         print(f"[http_post_server] 监听 {url} （本机可用 {url_local}）")
     else:
         print(f"[http_post_server] 监听 {url}")
-    print("  obs relay:  export RSL_RL_ISRC_OBS_RELAY_URL=" + url)
-    print("  仿真 POST:  export RSL_RL_ISRC_POST_URL=" + url)
+    print("  训练遥测:  export RSL_RL_ISRC_OBS_RELAY_URL=" + url)
     if show_preview:
         print(
             f"  数值预览: 每消息前 {preview_envs} 个 env，"

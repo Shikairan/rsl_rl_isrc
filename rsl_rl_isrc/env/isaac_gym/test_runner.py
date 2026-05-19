@@ -43,7 +43,7 @@ class G1OnPolicyTestRunner(OnPolicyRunner):
                 print_obs=print_obs,
             )
             self.obs_server.start()
-            self.obs_server.bind_publisher(self.step_obs)
+            self.obs_server.bind_publisher(self.step_obs, env=self.env)
 
     def learn(self, num_learning_iterations, init_at_random_ep_len=False):
         self._log_iter_denominator = int(num_learning_iterations)

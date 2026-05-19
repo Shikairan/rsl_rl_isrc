@@ -3,6 +3,8 @@
 
 ``G1OnPolicyTestRunner`` 使用单次 ``learn(N)``（每 iter 前 ``sync_instr``），与 LSTM PPO 兼容。
 
+export RSL_RL_ISRC_OBS_RELAY_URL='http://localhost:18888/post'
+
 依赖：已安装 Isaac Gym、CUDA；物理模型为 ``robotmodel/g1_description/g1_12dof.urdf``；
 仿真在 ``rsl_rl_isrc.env.isaac_gym.legged``。
 

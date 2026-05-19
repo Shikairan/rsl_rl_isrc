@@ -18,13 +18,12 @@ from collections import deque
 import statistics
 import torch
 from torch.utils.tensorboard import SummaryWriter
-from multiprocessing import Pool
 import torch.distributed as dist
 
 from rsl_rl_isrc.algorithms.sac_policy import SAC
 from rsl_rl_isrc.modules import SACNetworks
 from rsl_rl_isrc.env import VecEnv
-from rsl_rl_isrc.sockets import send_post_request, StepObsPublisher
+from rsl_rl_isrc.sockets import StepObsPublisher
 
 
 class SACRunner:
@@ -43,9 +42,6 @@ class SACRunner:
         self.local_rank = int(os.environ.get('LOCAL_RANK', 0))
         self.device = device
         self.env = env
-
-        self.pool = Pool(processes=60) if dist.is_initialized() else None
-        self.state_tag = torch.tensor([0, 0, 0, 64], device=self.device)
 
         # SAC 使用 SACNetworks，需要动作边界（从 policy_cfg 或 algorithm 传入）
         action_bounds = self.alg_cfg.get("action_bounds", (-1.0, 1.0))
@@ -75,40 +71,15 @@ class SACRunner:
             action_shape=(self.env.num_actions,)
         )
 
-        self.retstate_list = []
         self.log_dir = log_dir
         self.writer = None
         self.tot_timesteps = 0
         self.tot_time = 0
         self.current_learning_iteration = 0
         self.step_obs = StepObsPublisher(self.rank, self.task, self.env.num_envs)
+        self.step_obs.set_env(self.env)
 
         self.env.reset(torch.arange(self.env.num_envs))
-
-    def socket_send(self):
-        """发送状态到远端（若 env 支持 base_pos 等）"""
-        if not dist.is_initialized() or self.pool is None:
-            return
-        if self.state_tag[0] != self.rank:
-            return
-        if self.state_tag[1] == 1.0:
-            return
-        if not hasattr(self.env, 'base_pos') or not hasattr(self.env, 'base_quat') or not hasattr(self.env, 'dof_pos'):
-            return
-        try:
-            location = self.env.base_pos[self.state_tag[2]:self.state_tag[3], :].clone()
-            location[:, 1] = location[:, 1] - torch.arange(
-                int(self.state_tag[2].item()), int(self.state_tag[3].item()), device=location.device
-            ).float() * 3
-            tt = torch.cat((
-                location,
-                self.env.base_quat[self.state_tag[2]:self.state_tag[3], :],
-                self.env.dof_pos[self.state_tag[2]:self.state_tag[3], :]
-            ), dim=1).cpu().tolist()
-            ret = self.pool.apply_async(send_post_request, args=(tt, self.rank, self.task))
-            self.retstate_list.append(ret)
-        except Exception:
-            pass
 
     def learn(self, num_learning_iterations, init_at_random_ep_len=False):
         """SAC 主循环：每步 ``process_env_step``、软更新 Q/Actor/温度，并记录 TensorBoard 指标。"""
@@ -150,7 +121,6 @@ class SACRunner:
 
                 obs_next, _, rewards, dones, infos = self.env.step(actions)
                 self.step_obs.push(obs_next)
-                self.socket_send()
 
                 obs_next = obs_next.to(self.device)
                 rewards = rewards.to(self.device) if torch.is_tensor(rewards) else torch.tensor(rewards, device=self.device)
@@ -205,9 +175,6 @@ class SACRunner:
                 self.log(locals())
             if it % self.save_interval == 0 and (not dist.is_initialized() or dist.get_rank() == 0):
                 self.save(os.path.join(self.log_dir, f'model_{it}.pt'))
-            # 清理未消费的异步 POST 结果，防止 retstate_list 无限增长（内存泄漏）
-            if self.retstate_list:
-                self.retstate_list = []
             ep_infos.clear()
 
         self.current_learning_iteration += num_learning_iterations

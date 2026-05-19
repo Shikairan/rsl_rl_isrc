@@ -17,13 +17,11 @@ from collections import deque
 import statistics
 import torch
 from torch.utils.tensorboard import SummaryWriter
-from multiprocessing import Pool
 import torch.distributed as dist
 
 from rsl_rl_isrc.algorithms.trpo_policy import TRPOPolicy
 from rsl_rl_isrc.env import VecEnv
-from rsl_rl_isrc.sockets import send_post_request, StepObsPublisher
-from rsl_rl_isrc.sockets.http_post import _POST_TIMEOUT
+from rsl_rl_isrc.sockets import StepObsPublisher
 
 
 class TRPORunner:
@@ -42,9 +40,6 @@ class TRPORunner:
         self.local_rank = int(os.environ.get('LOCAL_RANK', 0))
         self.device = device
         self.env = env
-
-        self.pool = Pool(processes=60) if dist.is_initialized() else None
-        self.state_tag = torch.tensor([0, 0, 0, 64], device=self.device)
 
         num_critic_obs = self.env.num_privileged_obs if self.env.num_privileged_obs is not None else self.env.num_obs
         action_bounds = self.alg_cfg.get("action_bounds", (-1.0, 1.0))
@@ -70,43 +65,18 @@ class TRPORunner:
             action_shape=[self.env.num_actions]
         )
 
-        self.retstate_list = []
         self.log_dir = log_dir
         self.writer = None
         self.tot_timesteps = 0
         self.tot_time = 0
         self.current_learning_iteration = 0
         self.step_obs = StepObsPublisher(self.rank, self.task, self.env.num_envs)
+        self.step_obs.set_env(self.env)
 
         self.env.reset(torch.arange(self.env.num_envs))
 
-    def socket_send(self):
-        """发送状态到远端（若 env 支持 base_pos 等）"""
-        if not dist.is_initialized() or self.pool is None:
-            return
-        if self.state_tag[0] != self.rank:
-            return
-        if self.state_tag[1] == 1.0:
-            return
-        if not hasattr(self.env, 'base_pos') or not hasattr(self.env, 'base_quat') or not hasattr(self.env, 'dof_pos'):
-            return
-        try:
-            location = self.env.base_pos[self.state_tag[2]:self.state_tag[3], :].clone()
-            location[:, 1] = location[:, 1] - torch.arange(
-                int(self.state_tag[2].item()), int(self.state_tag[3].item()), device=location.device
-            ).float() * 3
-            tt = torch.cat((
-                location,
-                self.env.base_quat[self.state_tag[2]:self.state_tag[3], :],
-                self.env.dof_pos[self.state_tag[2]:self.state_tag[3], :]
-            ), dim=1).cpu().tolist()
-            ret = self.pool.apply_async(send_post_request, args=(tt, self.rank, self.task))
-            self.retstate_list.append(ret)
-        except Exception:
-            pass
-
     def learn(self, num_learning_iterations, init_at_random_ep_len=False):
-        """TRPO 主循环：on-policy 采集、``state_tag`` 遥测、信赖域策略/价值更新与参数广播。"""
+        """TRPO 主循环：on-policy 采集、信赖域策略/价值更新与参数广播。"""
         if self.log_dir is not None and self.writer is None:
             if not dist.is_initialized() or dist.get_rank() == 0:
                 self.writer = SummaryWriter(log_dir=self.log_dir, flush_secs=10)
@@ -146,7 +116,6 @@ class TRPORunner:
 
                     obs, privileged_obs, rewards, dones, infos = self.env.step(actions)
                     self.step_obs.push(obs)
-                    self.socket_send()
 
                     critic_obs = privileged_obs if privileged_obs is not None else obs
                     obs, critic_obs = obs.to(self.device), critic_obs.to(self.device)
@@ -177,23 +146,8 @@ class TRPORunner:
 
             if dist.is_initialized():
                 dist.barrier()
-                # state_tag 遥测同步：由 rank 0 负责更新并广播给所有 rank
-                # 修复：dist.broadcast 是集体操作，所有 rank 都必须调用
-                rank_val = int(self.state_tag[0].item()) if torch.is_tensor(self.state_tag[0]) else int(self.state_tag[0])
-                if dist.get_rank() == rank_val:
-                    try:
-                        tmp = self.retstate_list[-1].get(timeout=_POST_TIMEOUT + 2) if self.retstate_list else {}
-                        if isinstance(tmp, dict) and 'error' not in tmp:
-                            self.state_tag = torch.tensor(tmp.get('state', self.state_tag.cpu().tolist()), device=self.device)
-                    except Exception:
-                        pass
-                    finally:
-                        self.retstate_list = []  # 无论成功或异常，始终清理防止内存泄漏
-                # 所有 rank 参与 broadcast（集体操作）
-                dist.broadcast(self.state_tag, src=rank_val)
-                dist.barrier()
 
-                # 步骤2：broadcast 汇聚各 rank 已计算好的 returns/advantages 到 rank 0
+                # broadcast 汇聚各 rank 已计算好的 returns/advantages 到 rank 0
                 if hasattr(self.policy.algorithm.storage, 'broadcast'):
                     self.policy.algorithm.storage.broadcast()
 

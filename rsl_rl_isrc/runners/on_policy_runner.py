@@ -7,7 +7,7 @@
 """PPO 训练运行器模块。
 
 负责与环境 ``VecEnv`` 交互、``PPO`` 算法更新、分布式下参数 ``broadcast``、
-TensorBoard 日志，以及可选的 HTTP 遥测（``socket_send`` / ``StepObsPublisher``）。
+TensorBoard 日志，以及可选的 ZMQ 遥测（``StepObsPublisher`` → ``ObsInstrServer``）。
 """
 
 import time
@@ -17,12 +17,10 @@ from typing import Callable, Optional
 import statistics
 from torch.utils.tensorboard import SummaryWriter
 import torch
-from multiprocessing import Pool
 from rsl_rl_isrc.algorithms import PPO
 from rsl_rl_isrc.modules import ActorCritic, ActorCriticRecurrent
 from rsl_rl_isrc.env import VecEnv
-from rsl_rl_isrc.sockets import send_post_request, StepObsPublisher
-from rsl_rl_isrc.sockets.http_post import _POST_TIMEOUT
+from rsl_rl_isrc.sockets import StepObsPublisher
 import torch.distributed as dist
 
 
@@ -42,9 +40,6 @@ class OnPolicyRunner:
         self.local_rank = int(os.environ.get('LOCAL_RANK', 0))
         self.device = device
         self.env = env
-        #print(self.env.num_dof)
-        self.pool = Pool(processes=60) if dist.is_initialized() else None
-        self.state_tag = torch.tensor([0,0,0,64]).to(self.device)
         if self.env.num_privileged_obs is not None:
             num_critic_obs = self.env.num_privileged_obs 
         else:
@@ -78,7 +73,6 @@ class OnPolicyRunner:
 
         # init storage and model
         self.alg.init_storage(self.env.num_envs, self.num_steps_per_env, [self.env.num_obs], [self.env.num_privileged_obs], [self.env.num_actions])
-        self.retstate_list = []
         # Log
         self.log_dir = log_dir
         self.writer = None
@@ -89,39 +83,10 @@ class OnPolicyRunner:
         self._log_iter_denominator = None
         self._log_iter_start = 0
         self.step_obs = StepObsPublisher(self.rank, self.task, self.env.num_envs)
+        self.step_obs.set_env(self.env)
 
         self.env.reset(torch.arange(self.env.num_envs))
-   
 
-    def socket_send(self):
-        """按 ``state_tag`` 将部分 env 的位姿/关节经进程池异步 POST 到远端（与渲染或调度服务对接）。
-
-        仅当 ``state_tag[0]`` 等于本进程 ``rank`` 且 ``state_tag[1] != 1`` 时发送；
-        返回的 ``state`` 在 ``learn`` 中由指定 rank 拉取并 ``broadcast`` 更新 ``state_tag``。
-        """
-        if not dist.is_initialized() or self.pool is None:
-            return
-        if not hasattr(self.env, 'base_pos') or not hasattr(self.env, 'base_quat') or not hasattr(self.env, 'dof_pos'):
-            return
-        if self.state_tag[0] != self.rank:
-            return
-        if self.state_tag[1] == 1.0:
-            return
-        try:
-            location = self.env.base_pos[self.state_tag[2]:self.state_tag[3], :].clone()
-            location[:, 1] = location[:, 1] - torch.arange(
-                int(self.state_tag[2].item()), int(self.state_tag[3].item()), device=location.device
-            ).float() * 3
-            tt = torch.cat((
-                location,
-                self.env.base_quat[self.state_tag[2]:self.state_tag[3], :],
-                self.env.dof_pos[self.state_tag[2]:self.state_tag[3], :]
-            ), dim=1).cpu().tolist()
-            ret = self.pool.apply_async(send_post_request, args=(tt, self.rank, self.task))
-            self.retstate_list.append(ret)
-        except Exception:
-            pass
- 
     def learn(
         self,
         num_learning_iterations,
@@ -136,7 +101,6 @@ class OnPolicyRunner:
             pre_iter_callback: 可选；每轮学习迭代开始前调用 ``callback(it)``（如 ZMQ ``sync_instr``）。
 
         分布式约定:
-            每轮结束由 ``state_tag[0]`` 指定 rank 取回 HTTP 异步结果并广播 ``state_tag``；
             仅 rank0 执行 ``alg.update``，随后对所有 rank 广播 actor_critic 参数。
         """
         # initialize writer
@@ -170,7 +134,6 @@ class OnPolicyRunner:
                     actions = self.alg.act(obs, critic_obs)
                     obs, privileged_obs, rewards, dones, infos = self.env.step(actions)
                     self.step_obs.push(obs)
-                    self.socket_send() 
                     critic_obs = privileged_obs if privileged_obs is not None else obs
                     obs, critic_obs, rewards, dones = obs.to(self.device), critic_obs.to(self.device), rewards.to(self.device), dones.to(self.device)
                     self.alg.process_env_step(rewards, dones, infos)
@@ -195,20 +158,6 @@ class OnPolicyRunner:
                 self.alg.compute_returns(critic_obs)
             
             if dist.is_initialized():
-                dist.barrier()
-                # state_tag 遥测同步：由 state_tag[0] 负责更新，所有 rank 参与 broadcast
-                rank_val = int(self.state_tag[0].item()) if torch.is_tensor(self.state_tag[0]) else int(self.state_tag[0])
-                if dist.get_rank() == rank_val:
-                    try:
-                        tmp_state = self.retstate_list[-1].get(timeout=_POST_TIMEOUT + 2) if self.retstate_list else {}
-                        if isinstance(tmp_state, dict) and 'error' not in tmp_state:
-                            self.state_tag = torch.tensor(tmp_state.get('state', self.state_tag.cpu().tolist()), device=self.device)
-                    except Exception as e:
-                        print(e)
-                    finally:
-                        self.retstate_list = []  # 无论成功或异常，始终清理防止内存泄漏
-                # 所有 rank 参与 broadcast（集体操作，必须在 if/try 块外调用）
-                dist.broadcast(self.state_tag, src=rank_val)
                 dist.barrier()
                 self.alg.storage.broadcast()
 

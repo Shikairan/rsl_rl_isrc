@@ -4,23 +4,27 @@
 # 致谢：rsl_rl 原团队；本仓库由 ISRC 在独立包名 rsl_rl_isrc 下维护与扩展。
 # License: BSD-3-Clause（见仓库根目录及 setup.py）。
 #
-"""HTTP POST：``send_post_request``（仿真张量）与 ``StepObsPublisher``（按指令切片上报观测）。
+"""``StepObsPublisher``：按指令切片上报 obs 与机器人状态（ZMQ → ObsInstrServer）。
 
-``StepObsPublisher`` 当前**仅负责发送**：
+对外唯一训练遥测通路（经 ``ObsInstrServer`` 可选 HTTP 中继）::
 
-- 绑定到 ``ObsInstrServer`` 后，通过 ZMQ PUSH 将 obs 数据推送到服务端（fire-and-forget）。
-- ``self._instr`` 与 ``ObsInstrServer._instr`` 是**同一张量对象**，
-  ``ObsInstrServer.sync_instr()`` 广播后 publisher 自动获得最新指令。
-- **不做任何数据接收，不调用 dist.broadcast**（该职责由 ObsInstrServer 承担）。
+    Runner.env.step → StepObsPublisher.push(obs)
+        → ObsInstrServer (PULL) → RSL_RL_ISRC_OBS_RELAY_URL
 
-若未绑定服务端，则 ``push()`` 为空操作。
+``obs_step`` JSON 字段：
+
+- ``obs``：策略观测，维数任意
+- ``base_pos`` / ``base_quat`` / ``dof_pos``：若 VecEnv 提供（见 ``StateExportVecEnv``），
+  与 ``obs`` 相同 env 切片；四元数 **xyzw**
+
+独立工具 ``send_post_request`` 仍可供非训练脚本使用，Runner 不调用。
 """
 
 from __future__ import annotations
 
 import json
 import os
-from typing import Optional, TYPE_CHECKING
+from typing import Any, List, Optional, TYPE_CHECKING, Tuple
 
 import requests
 import torch
@@ -32,20 +36,17 @@ if TYPE_CHECKING:
 
 _DEFAULT_POST_URL = "http://172.17.0.16:18888/post"
 
-# 超时时间通过环境变量配置（秒），避免 pool worker 或训练循环永久阻塞
 _POST_TIMEOUT = float(os.environ.get("RSL_RL_ISRC_POST_TIMEOUT", "10"))
-_OBS_TIMEOUT  = float(os.environ.get("RSL_RL_ISRC_OBS_TIMEOUT",  "2"))
+_OBS_TIMEOUT = float(os.environ.get("RSL_RL_ISRC_OBS_TIMEOUT", "2"))
+
+_ROBOT_STATE_KEYS = ("base_pos", "base_quat", "dof_pos")
 
 
 def send_post_request(data, rank, task):
-    """向 ``RSL_RL_ISRC_POST_URL``（或默认 URL）POST 仿真/自定义张量数据。
-
-    请求体含 ``type/data``、``rank``、``task``、``tensor``。成功返回服务端 JSON；异常时返回 ``{"error": ...}``。
-    超时由 ``RSL_RL_ISRC_POST_TIMEOUT``（默认 10s）控制，防止 pool worker 永久挂起。
-    """
+    """向 ``RSL_RL_ISRC_POST_URL`` POST 自定义张量（``type=data``）。供独立脚本使用，非 Runner 遥测。"""
     header = {"Content-Type": "application/json"}
-    url    = os.environ.get("RSL_RL_ISRC_POST_URL", _DEFAULT_POST_URL)
-    body   = {"type": "data", "rank": rank, "task": task, "tensor": data}
+    url = os.environ.get("RSL_RL_ISRC_POST_URL", _DEFAULT_POST_URL)
+    body = {"type": "data", "rank": rank, "task": task, "tensor": data}
     try:
         response = requests.post(url, json=body, headers=header, timeout=_POST_TIMEOUT)
         response.raise_for_status()
@@ -54,50 +55,42 @@ def send_post_request(data, rank, task):
         return {"error": str(e)}
 
 
+def _env_slice_bounds(env_lo: int, env_hi: int, num_envs: int, n_rows: int) -> Tuple[int, int]:
+    env_hi = min(env_hi, num_envs, n_rows)
+    env_hi = max(env_hi, env_lo)
+    return env_lo, env_hi
+
+
+def _slice_env_tensor(
+    tensor: torch.Tensor,
+    env_lo: int,
+    env_hi: int,
+    num_envs: int,
+) -> List[List[float]]:
+    env_lo, env_hi = _env_slice_bounds(env_lo, env_hi, num_envs, int(tensor.shape[0]))
+    return tensor[env_lo:env_hi].detach().cpu().tolist()
+
+
 class StepObsPublisher:
-    """``env.step`` 后按 ``_instr`` 指令切片 obs 并通过 ZMQ PUSH 上报到 ``ObsInstrServer``。
-
-    **设计约定**
-
-    - ``push()`` 只**发送**，不做任何数据接收，不修改 ``_instr``，不调用 ``dist.broadcast``。
-    - ``_instr`` 张量由 ``ObsInstrServer`` 统一管理；通过 ``bind_to_server()`` 绑定后，
-      两者共享同一张量对象，``ObsInstrServer.sync_instr()`` 广播后 publisher 自动获得最新指令。
-    - 未绑定服务端时，``push()`` 为空操作（disabled）。
-
-    **指令格式**：``[sender_rank, aux, env_start, env_end)``（int64，CPU 张量）
-    """
+    """``env.step`` 后按 ``_instr`` 切片 obs / 机器人状态，ZMQ PUSH 到 ``ObsInstrServer``。"""
 
     def __init__(self, rank: int, task: str, num_envs: int):
-        """
-        参数
-        ----
-        rank : int
-            当前进程 rank。
-        task : str
-            任务名称（透传给消息体）。
-        num_envs : int
-            并行环境数，用于默认指令上界。
-        """
         self._init_rank = int(rank)
-        self._task      = task
-        self._num_envs  = max(1, int(num_envs))
+        self._task = task
+        self._num_envs = max(1, int(num_envs))
 
-        # 指令张量：[sender_rank, aux, env_start, env_end]
-        # bind_to_server 后会被替换为与 ObsInstrServer 共享的对象
         self._instr: torch.Tensor = torch.tensor(
             [0, 0, 0, self._num_envs], dtype=torch.int64
         )
 
-        # ZMQ PUSH socket（bind_to_server 后初始化）
-        self._zmq_ctx:   Optional[zmq.Context] = None
-        self._push_sock: Optional[zmq.Socket]  = None
-
-        # 关联的 ObsInstrServer 实例（用于获取共享 _instr）
+        self._zmq_ctx: Optional[zmq.Context] = None
+        self._push_sock: Optional[zmq.Socket] = None
         self._server: Optional[ObsInstrServer] = None
+        self._env: Any = None
 
-    # ──────────────────────────────────────────────────────────────────────────
-    # 绑定到服务端（由 ObsInstrServer.bind_publisher() 间接调用）
-    # ──────────────────────────────────────────────────────────────────────────
+    def set_env(self, env: Any) -> None:
+        """绑定 VecEnv（如 ``StateExportVecEnv``），``push`` 时读取 ``base_pos`` 等。"""
+        self._env = env
 
     def _bind_to_server(
         self,
@@ -105,108 +98,88 @@ class StepObsPublisher:
         host: str = "localhost",
         port: int = 15555,
     ) -> None:
-        """内部方法：由 ``ObsInstrServer.bind_publisher()`` 调用。
-
-        执行两件事：
-
-        1. 将 ``self._instr`` 替换为与 ``server._instr`` 相同的张量对象，
-           使 ``ObsInstrServer.sync_instr()`` 的 ``dist.broadcast`` 原地更新后
-           publisher 无需额外操作即可获取最新指令。
-        2. 建立 ZMQ PUSH socket，连接到 Server 的 PULL 端口。
-        """
-        # 共享张量（关键：同一内存对象）
         self._server = server
-        self._instr  = server._instr   # noqa: SLF001 — 有意访问，两者共享
+        self._instr = server._instr  # noqa: SLF001
 
-        # 建立 ZMQ PUSH 连接
         if self._zmq_ctx is not None:
             self.close()
-        self._zmq_ctx   = zmq.Context()
+        self._zmq_ctx = zmq.Context()
         self._push_sock = self._zmq_ctx.socket(zmq.PUSH)
         self._push_sock.connect(f"tcp://{host}:{port}")
-        # 非阻塞发送，发送失败静默丢弃（避免阻塞训练循环）
         self._push_sock.setsockopt(zmq.SNDTIMEO, 0)
-        self._push_sock.setsockopt(zmq.LINGER,   0)
-        self._push_sock.setsockopt(zmq.SNDHWM,   100)  # 最多排队 100 条消息
-
-    # ──────────────────────────────────────────────────────────────────────────
-    # 核心方法
-    # ──────────────────────────────────────────────────────────────────────────
+        self._push_sock.setsockopt(zmq.LINGER, 0)
+        self._push_sock.setsockopt(zmq.SNDHWM, 100)
 
     @property
     def enabled(self) -> bool:
-        """是否已绑定到服务端并可发送数据。"""
         return self._push_sock is not None
 
+    def _append_robot_state(self, msg: dict, env_lo: int, env_hi: int) -> None:
+        env = self._env
+        if env is None:
+            return
+        if getattr(env, "has_robot_state", False) is False:
+            from rsl_rl_isrc.env.state_export_vec_env import env_has_robot_state
+
+            if not env_has_robot_state(env):
+                return
+        for key in _ROBOT_STATE_KEYS:
+            tensor = getattr(env, key, None)
+            if torch.is_tensor(tensor):
+                msg[key] = _slice_env_tensor(tensor, env_lo, env_hi, self._num_envs)
+
     def push(self, obs) -> None:
-        """按当前 ``_instr`` 指令切片 obs，通过 ZMQ PUSH 发送到 ``ObsInstrServer``。
-
-        特性
-        ----
-        - **Fire-and-forget**：发送后不等待响应，不阻塞训练循环。
-        - **只发送**：不修改 ``_instr``，不调用 ``dist.broadcast``。
-        - 仅当 ``_instr[0]``（leader rank）与当前进程 rank 一致时发送。
-        - 未绑定服务端时直接返回。
-
-        参数
-        ----
-        obs : Tensor 或 list
-            当前步的观测，形状 ``(num_envs, obs_dim)``。
-        """
+        """按 ``_instr`` 切片 obs（及可选机器人状态），发送到 ``ObsInstrServer``。"""
         if not self.enabled:
             return
 
-        my_rank    = self._my_rank()
-        leader     = int(self._instr[0].item())
-        world_size = (dist.get_world_size()
-                      if dist.is_available() and dist.is_initialized()
-                      else 1)
+        my_rank = self._my_rank()
+        leader = int(self._instr[0].item())
+        world_size = (
+            dist.get_world_size()
+            if dist.is_available() and dist.is_initialized()
+            else 1
+        )
         leader = leader % world_size
 
         if my_rank != leader:
-            return  # 非 leader rank，静默跳过
+            return
 
         try:
             env_lo = max(0, int(self._instr[2].item()))
             env_hi = int(self._instr[3].item())
 
             if torch.is_tensor(obs):
-                n      = int(obs.shape[0])
-                env_hi = min(env_hi, self._num_envs, n)
-                env_hi = max(env_hi, env_lo)
+                n = int(obs.shape[0])
+                env_lo, env_hi = _env_slice_bounds(env_lo, env_hi, self._num_envs, n)
                 obs_slice = obs[env_lo:env_hi].detach().cpu().tolist()
             else:
-                n      = len(obs)
-                env_hi = min(env_hi, self._num_envs, n)
-                env_hi = max(env_hi, env_lo)
+                n = len(obs)
+                env_lo, env_hi = _env_slice_bounds(env_lo, env_hi, self._num_envs, n)
                 obs_slice = list(obs[env_lo:env_hi])
 
             msg = {
-                "type":        "obs_step",
-                "rank":        my_rank,
-                "task":        self._task,
+                "type": "obs_step",
+                "rank": my_rank,
+                "task": self._task,
                 "instruction": self._instr.tolist(),
-                "obs":         obs_slice,
+                "obs": obs_slice,
             }
-            # NOBLOCK：队列满或服务端未就绪时直接丢弃，不抛异常
+            self._append_robot_state(msg, env_lo, env_hi)
+
             self._push_sock.send(json.dumps(msg).encode(), zmq.NOBLOCK)
         except zmq.Again:
-            pass   # 队列满，静默丢弃
+            pass
         except Exception:
-            pass   # 其它异常静默处理，不影响训练主循环
+            pass
 
     def close(self) -> None:
-        """释放 ZMQ 资源。"""
         if self._push_sock is not None:
             self._push_sock.close()
             self._push_sock = None
         if self._zmq_ctx is not None:
             self._zmq_ctx.term()
             self._zmq_ctx = None
-
-    # ──────────────────────────────────────────────────────────────────────────
-    # 内部工具
-    # ──────────────────────────────────────────────────────────────────────────
 
     def _my_rank(self) -> int:
         if dist.is_available() and dist.is_initialized():
