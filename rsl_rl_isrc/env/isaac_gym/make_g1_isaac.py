@@ -91,6 +91,15 @@ def build_g1_ppo_train_cfg() -> dict:
     return normalize_train_cfg(_class_to_dict(G1RoughCfgPPO()))
 
 
+def build_g1_single_leg_train_cfg() -> dict:
+    """构建单腿站立任务的 PPO 训练配置。"""
+    from rsl_rl_isrc.env.isaac_gym.legged.envs.g1.g1_single_leg_config import (
+        G1SingleLegCfgPPO,
+    )
+
+    return normalize_train_cfg(_class_to_dict(G1SingleLegCfgPPO()))
+
+
 def default_g1_log_dir(train_cfg: dict, log_root: str | None = None) -> str:
     from datetime import datetime
 
@@ -105,32 +114,69 @@ def default_g1_log_dir(train_cfg: dict, log_root: str | None = None) -> str:
     return os.path.join(log_root, f"{stamp}_{run_name}")
 
 
+_SUPPORTED_TASKS = ("walking", "single_leg")
+
+
 def make_g1_isaac_env(
     num_envs: int = 64,
     headless: bool = True,
     sim_device: str = "cuda:0",
+    task: str = "walking",
 ) -> Tuple["IsaacG1VecEnv", object, dict]:
-    """创建 G1 Isaac Gym 向量环境（rsl_rl_isrc 内置 ``legged`` 实现，单进程）。"""
+    """创建 G1 Isaac Gym 向量环境（rsl_rl_isrc 内置 ``legged`` 实现，单进程）。
+
+    Args:
+        num_envs: 并行仿真环境数量。
+        headless: 是否无头（不显示 Isaac Gym 窗口）。
+        sim_device: 仿真设备，如 ``"cuda:0"`` 或 ``"cpu"``。
+        task: 任务类型，支持：
+
+            * ``"walking"`` — 行走任务（默认，使用 G1RoughCfg + G1Robot）
+            * ``"single_leg"`` — 单腿站立任务（使用 G1SingleLegCfg + G1SingleLegRobot）
+
+    Returns:
+        ``(IsaacG1VecEnv, cfg, train_cfg_dict)``
+
+    Raises:
+        ValueError: 若 ``task`` 不在支持列表中。
+    """
+    if task not in _SUPPORTED_TASKS:
+        raise ValueError(
+            f"未知任务 '{task}'，支持的任务为: {_SUPPORTED_TASKS}"
+        )
+
     gymapi = _import_isaac()
 
-    from rsl_rl_isrc.env.isaac_gym.legged.envs.g1.g1_config import G1RoughCfg
-    from rsl_rl_isrc.env.isaac_gym.legged.envs.g1.g1_env import G1Robot
     from rsl_rl_isrc.env.isaac_gym.legged.utils.helpers import parse_sim_params, set_seed
     from rsl_rl_isrc.env.isaac_gym.isaac_g1_vec_env import IsaacG1VecEnv
-
     from rsl_rl_isrc.env.isaac_gym.legged import ensure_g1_urdf
 
-    cfg = G1RoughCfg()
+    if task == "single_leg":
+        from rsl_rl_isrc.env.isaac_gym.legged.envs.g1.g1_single_leg_config import (
+            G1SingleLegCfg,
+        )
+        from rsl_rl_isrc.env.isaac_gym.legged.envs.g1.g1_single_leg_env import (
+            G1SingleLegRobot as RobotClass,
+        )
+
+        cfg = G1SingleLegCfg()
+        train_cfg = build_g1_single_leg_train_cfg()
+    else:  # "walking"
+        from rsl_rl_isrc.env.isaac_gym.legged.envs.g1.g1_config import G1RoughCfg
+        from rsl_rl_isrc.env.isaac_gym.legged.envs.g1.g1_env import G1Robot as RobotClass
+
+        cfg = G1RoughCfg()
+        train_cfg = build_g1_ppo_train_cfg()
+
     cfg.env.num_envs = int(num_envs)
     cfg.asset.file = ensure_g1_urdf()
 
-    train_cfg = build_g1_ppo_train_cfg()
     set_seed(train_cfg.get("seed", 1))
 
     args = _make_sim_args(sim_device, headless, gymapi)
     sim_params = parse_sim_params(args, {"sim": _class_to_dict(cfg.sim)})
 
-    robot = G1Robot(
+    robot = RobotClass(
         cfg=cfg,
         sim_params=sim_params,
         physics_engine=args.physics_engine,
