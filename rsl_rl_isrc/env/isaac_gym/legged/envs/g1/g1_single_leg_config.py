@@ -136,3 +136,9 @@ class G1SingleLegCfgPPO(G1RoughCfgPPO):
         experiment_name = "g1_single_leg"
         run_name = ""
         max_iterations = 10000
+        # 每次采集的步数（单位：policy step，每步 = sim_dt × decimation = 0.02s）。
+        # 单腿站立 episode 最长 20s = 1000步，num_steps_per_env 越大，
+        # GAE 优势估计窗口越宽，价值函数越准确，学习越快。
+        # 24步 = 0.48s（基类默认，对本任务太短，学习缓慢）
+        # 60步 = 1.20s（推荐：覆盖足够时序，与历史成功配置一致）
+        num_steps_per_env = 60
