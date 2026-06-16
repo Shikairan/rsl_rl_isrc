@@ -4,9 +4,9 @@
 与 ``test_ppo_g1_isaac.py`` 相同管线（``make_g1_isaac_env`` + ``G1OnPolicyTestRunner``），
 物理模型固定为::
 
-    rsl_rl_isrc/robotmodel/g1_description/g1_12dof.urdf
+    rsl_rl_isrc/robotmodel/g1_description/g1_29dof.urdf
 
-（文件名保留历史用途；不再依赖 ``env/unitree_rl_gym``。）
+（不再依赖 ``env/unitree_rl_gym``。）
 
 运行::
 
@@ -153,7 +153,7 @@ def run_g1_isaac_training(
 def _parse_args() -> argparse.Namespace:
     default_num_envs = int(os.environ.get("G1_NUM_ENVS", "4096"))
     parser = argparse.ArgumentParser(
-        description="G1 Isaac Gym PPO（robotmodel g1_12dof.urdf + G1OnPolicyTestRunner）"
+        description="G1 Isaac Gym PPO（robotmodel g1_29dof.urdf + G1OnPolicyTestRunner）"
     )
     parser.add_argument(
         "--num-envs",
