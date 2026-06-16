@@ -65,6 +65,18 @@ _DEFAULT_RELAY_URL      = os.environ.get("RSL_RL_ISRC_OBS_RELAY_URL", "").strip(
 _DEFAULT_RELAY_TIMEOUT  = float(os.environ.get("RSL_RL_ISRC_OBS_RELAY_TIMEOUT", "2"))
 
 
+def _dist_broadcast_device() -> torch.device:
+    """NCCL 集体通信要求张量位于 CUDA；gloo 使用 CPU。"""
+    if (
+        dist.is_available()
+        and dist.is_initialized()
+        and dist.get_backend() == "nccl"
+        and torch.cuda.is_available()
+    ):
+        return torch.device(f"cuda:{int(os.environ.get('LOCAL_RANK', '0'))}")
+    return torch.device("cpu")
+
+
 def default_obs_env_hi(num_envs: int) -> int:
     """默认 obs 切片上界：``min(64, num_envs)``。"""
     return min(64, max(1, int(num_envs)))
@@ -234,7 +246,8 @@ class ObsInstrServer:
             return changed
 
         # 分布式：rank 0 设置 changed_flag，broadcast 给所有 rank
-        changed_flag = torch.zeros(1, dtype=torch.int64)
+        device = _dist_broadcast_device()
+        changed_flag = torch.zeros(1, dtype=torch.int64, device=device)
         if self._is_rank0() and self._instr_changed.is_set():
             changed_flag[0] = 1
 
@@ -242,9 +255,9 @@ class ObsInstrServer:
 
         if int(changed_flag.item()):
             with self._instr_lock:
-                # 原地广播 _instr（与所有绑定的 StepObsPublisher 共享同一张量对象，
-                # 广播后无需额外赋值，各 rank 的 publisher._instr 自动持有最新值）
-                dist.broadcast(self._instr, src=0)
+                instr_buf = self._instr.to(device)
+                dist.broadcast(instr_buf, src=0)
+                self._instr.copy_(instr_buf.cpu())
             if self._is_rank0():
                 self._instr_changed.clear()
             return True
@@ -260,7 +273,12 @@ class ObsInstrServer:
     # 与 StepObsPublisher 的绑定
     # ──────────────────────────────────────────────────────────────────────────
 
-    def bind_publisher(self, publisher: StepObsPublisher, env=None) -> None:
+    def bind_publisher(
+        self,
+        publisher: StepObsPublisher,
+        env=None,
+        host: str = "localhost",
+    ) -> None:
         """将 ``StepObsPublisher`` 与本 Server 关联。
 
         绑定后：
@@ -272,7 +290,7 @@ class ObsInstrServer:
         """
         publisher._bind_to_server(
             server=self,
-            host="localhost",
+            host=host,
             port=self._obs_pull_port,
         )
         if env is not None:

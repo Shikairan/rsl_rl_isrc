@@ -22,6 +22,38 @@ python rsl_rl_isrc/tests/test_ppo_g1_isaac.py --no-zmq-obs --num-envs 64 --max-i
 pytest rsl_rl_isrc/tests/test_ppo_g1_isaac.py -v -m isaac
 ```
 
+## 分布式（多机多卡）
+
+`rsl_rl_isrc` 的 PPO Runner 在 `torch.distributed` 初始化后采用：
+
+- 各 rank 本地 rollout / 推理
+- `RolloutStorage.broadcast()` gather 到 rank0
+- 仅 rank0 执行 backward/update
+- 参数广播回所有 rank
+
+可直接使用 `test_ppo_g1_isaac_ddp.py`：
+
+```bash
+# 单机 2 卡 smoke
+torchrun --standalone --nnodes=1 --nproc_per_node=2 \
+  rsl_rl_isrc/tests/test_ppo_g1_isaac_ddp.py \
+  --num-envs 64 --max-iterations 5 --print-obs
+
+# 多机 2x2（节点0）
+torchrun --nnodes=2 --nproc_per_node=2 --node_rank=0 \
+  --master_addr=10.0.0.1 --master_port=29500 \
+  rsl_rl_isrc/tests/test_ppo_g1_isaac_ddp.py \
+  --num-envs 64 --max-iterations 5 --obs-server-host 10.0.0.1 --print-obs
+
+# 多机 2x2（节点1）
+torchrun --nnodes=2 --nproc_per_node=2 --node_rank=1 \
+  --master_addr=10.0.0.1 --master_port=29500 \
+  rsl_rl_isrc/tests/test_ppo_g1_isaac_ddp.py \
+  --num-envs 64 --max-iterations 5 --obs-server-host 10.0.0.1 --print-obs
+```
+
+> `--num-envs` 语义为每个 rank 的本地并行环境数，全局吞吐约为 `num_envs * world_size`。
+
 ## 环境变量
 
 | 变量 | 默认 | 说明 |
@@ -31,6 +63,7 @@ pytest rsl_rl_isrc/tests/test_ppo_g1_isaac.py -v -m isaac
 | `RSL_RL_ISRC_CTRL_REP_PORT` | `15556` | 外部指令 REP |
 | `RSL_RL_ISRC_OBS_PRINT` | `0` | 设为 `1` 时打印 obs 摘要 |
 | `RSL_RL_ISRC_OBS_RELAY_URL` | 空 | 非空则将 `obs_step` HTTP POST 到该 URL（训练遥测唯一通路） |
+| `RSL_RL_ISRC_OBS_SERVER_HOST` | 空 | 多机 DDP 下非 rank0 连接 rank0 ObsInstrServer 的主机名/IP（未设置时可用 `--obs-server-host`） |
 
 ## VecEnv 与机器人状态导出
 
@@ -66,6 +99,9 @@ G1 训练使用 [`IsaacG1VecEnv`](../env/isaac_gym/isaac_g1_vec_env.py)，继承
 
 ```bash
 python rsl_rl_isrc/tests/zmq_obs_ctrl_client.py --state 0 0 10 20
+
+# 多机时指定 rank0 机器
+python rsl_rl_isrc/tests/zmq_obs_ctrl_client.py --host 10.0.0.1 --state 1 0 0 32
 ```
 
 消息格式：`{"state": [sender_rank, aux, env_start, env_end)}`。
@@ -91,3 +127,9 @@ python rsl_rl_isrc/tests/http_post_server.py
 export RSL_RL_ISRC_OBS_RELAY_URL=http://127.0.0.1:18888/post
 python rsl_rl_isrc/tests/test_ppo_g1_isaac.py --num-envs 64 --max-iterations 5
 ```
+
+## 网络与端口注意事项（多机）
+
+- `torchrun` 需要 `MASTER_ADDR:MASTER_PORT`（例：`10.0.0.1:29500`）可互通
+- ObsInstrServer 默认使用 `15555`（PULL）和 `15556`（REP）
+- 防火墙需放通 `29500`、`15555`、`15556`

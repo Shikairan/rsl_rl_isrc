@@ -28,6 +28,7 @@ class G1OnPolicyTestRunner(OnPolicyRunner):
         enable_obs_server: bool = True,
         obs_pull_port: Optional[int] = None,
         ctrl_rep_port: Optional[int] = None,
+        obs_server_host: str = "localhost",
         print_obs: bool = False,
     ):
         super().__init__(env=env, train_cfg=train_cfg, log_dir=log_dir, device=device)
@@ -43,7 +44,10 @@ class G1OnPolicyTestRunner(OnPolicyRunner):
                 print_obs=print_obs,
             )
             self.obs_server.start()
-            self.obs_server.bind_publisher(self.step_obs, env=self.env)
+            target_host = "localhost" if self.rank == 0 else obs_server_host
+            self.obs_server.bind_publisher(
+                self.step_obs, env=self.env, host=target_host
+            )
 
     def learn(self, num_learning_iterations, init_at_random_ep_len=False):
         self._log_iter_denominator = int(num_learning_iterations)

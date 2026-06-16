@@ -13,6 +13,7 @@
     ├── InitStateCfg        ← 初始根位姿与关节默认值
     ├── ControlCfg          ← 控制模式、PD 增益、动作缩放
     ├── CommandsCfg         ← 指令范围（速度、方向等）
+    ├── HandCommandsCfg   ← 手部关节目标角指令（HandBaseEnv）
     ├── DomainRandCfg       ← 域随机化开关与参数范围
     ├── NoiseCfg            ← 观测/动作噪声
     ├── ObsCfg              ← 观测维度与特权观测配置
@@ -187,6 +188,12 @@ class AssetCfg:
     foot_name: str = "foot"
     """脚部刚体名称的子串（用于脚部接触检测）。"""
 
+    fingertip_name: str = "tip"
+    """指尖刚体名称子串（手部环境），如可匹配 ``thumb_2``、``index_1`` 等。"""
+
+    palm_name: str = "palm"
+    """手掌/腕部刚体名称子串（手部碰撞惩罚与终止检测）。"""
+
     penalize_contacts_on: List[str] = field(default_factory=list)
     """碰撞惩罚部件名称列表（子串匹配），如 ``["thigh", "calf"]``。"""
 
@@ -356,6 +363,29 @@ class CommandsCfg:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# 手部关节目标指令
+# ─────────────────────────────────────────────────────────────────────────────
+@dataclass
+class HandCommandsCfg:
+    """单手关节目标角指令配置（用于 :class:`HandBaseEnv`）。"""
+
+    num_commands: int = 0
+    """指令维度，子类 cfg 中通常设为与 ``num_actions`` 相同。"""
+
+    resampling_time: float = 5.0
+    """指令重采样间隔（秒）。"""
+
+    joint_target_range: Tuple[float, float] = (-0.5, 0.5)
+    """相对 ``default_dof_pos`` 的关节目标角偏移采样范围（弧度）[min, max]。"""
+
+    command_scale: float = 1.0
+    """观测中指令分量的归一化缩放系数（越大则观测中指令数值越小）。"""
+
+    zero_threshold: float = 0.05
+    """采样后各维绝对值均低于此阈值时，将整段指令置零（保持默认抓型）。"""
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # 域随机化
 # ─────────────────────────────────────────────────────────────────────────────
 @dataclass
@@ -425,7 +455,15 @@ class ObsCfg:
     """观测空间维度与特权观测配置。"""
 
     num_obs: int = 48
-    """策略观测维度（Actor 输入）。"""
+    """策略观测维度（Actor 输入）。
+
+    手部环境（:class:`HandBaseEnv`）默认观测维度::
+
+        num_obs = 3 + num_commands + 3 * num_actions
+                = 3 + num_actions + 3 * num_actions   # 通常 num_commands == num_actions
+
+    即：重力投影 (3) + 关节目标指令 + 关节位置偏差 + 关节速度 + 上一步动作。
+    """
 
     num_privileged_obs: Optional[int] = None
     """
@@ -488,6 +526,9 @@ class RewardCfg:
     max_contact_force: float = 100.0
     """最大接触力阈值（N），超出产生惩罚。"""
 
+    fingertip_contact_threshold: float = 1.0
+    """指尖接触奖励的法向力阈值（N），超过视为有效接触。"""
+
     class scales:
         """奖励缩放系数字典（用内嵌类模拟 namespace）。
         子类中可直接覆盖各字段。
@@ -507,6 +548,11 @@ class RewardCfg:
         feet_stumble: float = -0.0
         action_rate: float = -0.01
         stand_still: float = -0.0
+        # 手部环境（HandBaseEnv）常用项，足式环境可保持为 0
+        tracking_joint_pos: float = 1.0
+        fingertip_contact: float = 0.0
+        target_hold: float = -0.0
+        dof_pos_limits: float = -0.0
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -555,6 +601,7 @@ class BaseEnvCfg:
     InitStateCfg = InitStateCfg
     ControlCfg = ControlCfg
     CommandsCfg = CommandsCfg
+    HandCommandsCfg = HandCommandsCfg
     DomainRandCfg = DomainRandCfg
     NoiseCfg = NoiseCfg
     ObsCfg = ObsCfg
