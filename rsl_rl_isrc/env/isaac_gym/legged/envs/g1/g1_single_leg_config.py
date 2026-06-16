@@ -3,8 +3,23 @@
 该配置与行走任务（G1RoughCfg）完全独立，互不干涉：
 - 关闭所有行走相关奖励（velx / vely / posx / posy / tracking_lin_vel / tracking_ang_vel / contact）
 - 将速度指令范围置零（机器人不需要向任何方向移动）
-- 开启 single_leg_contact 单腿触地一致性奖励
-- 保留姿态稳定、存活、关节限制等通用奖励
+- 开启 single_leg_contact 单腿触地奖励（大权重，作为主信号）
+- 保留姿态稳定、存活等通用奖励（已针对 29 DOF 重新标定量级）
+
+奖励设计说明（针对训练 iter~240 观测到的问题修正）
+-------------------------------------------------
+问题根因：
+  1. 负向奖励（dof_vel / ang_vel_xy 等）scale 沿用 12dof 设计，
+     29dof 关节数扩大 2.4 倍，累积惩罚远超正向信号，
+     导致每步总奖励接近零被 only_positive_rewards 裁掉，
+     优势函数方差趋近 0，价值网络无法学习。
+  2. single_leg_contact 权重过小，正向信号被完全淹没。
+
+修正原则：
+  - 正向信号（alive + single_leg_contact）必须在每一步的总奖励中占主导
+  - 负向惩罚项按 DOF 数量折算（12→29，约 0.4x 缩放）并进一步减小
+  - 单腿平衡需要角动量调节，ang_vel_xy 惩罚大幅降低
+  - 保留足够的正则化防止关节乱抖，但不能淹没任务信号
 """
 
 from rsl_rl_isrc.env.isaac_gym.legged.envs.g1.g1_config import G1RoughCfg, G1RoughCfgPPO
@@ -23,9 +38,9 @@ class G1SingleLegCfg(G1RoughCfg):
             heading = [0.0, 0.0]
 
     class rewards(G1RoughCfg.rewards):
-        """奖励设计：禁用行走相关项，启用单腿触地奖励。"""
+        """奖励设计：正向信号主导，负向惩罚适配 29 DOF 量级。"""
 
-        # 单腿站立的目标站立高度略低于行走（重心更稳）
+        # 单腿站立目标重心高度（略低于行走 0.78，重心更稳）
         base_height_target = 0.72
 
         class scales(G1RoughCfg.rewards.scales):
@@ -37,26 +52,54 @@ class G1SingleLegCfg(G1RoughCfg):
             tracking_lin_vel = 0.0
             tracking_ang_vel = 0.0
 
-            # 步态相位 contact / 摆腿高度 与单腿站立不相关，关闭
+            # 步态相位 contact / 摆腿高度与单腿站立无关，关闭
             contact = 0.0
             feet_swing_height = 0.0
 
-            # ── 单腿触地奖励（核心新增项） ────────────────────────────────
-            # 当且仅当恰好一只脚接触地面时给予正向奖励
-            single_leg_contact = 1.0
+            # ── 正向信号：必须在每步总奖励中占主导 ──────────────────────
 
-            # ── 保留通用稳定性奖励（与行走任务共享实现，数值独立可调） ──
-            alive = 0.45
-            orientation = -1.0
-            base_height = -8.0
-            lin_vel_z = -2.0
-            ang_vel_xy = -0.05
-            dof_acc = -2.5e-7
-            dof_vel = -1e-3
-            action_rate = -0.01
-            dof_pos_limits = -5.0
-            hip_pos = -1.0
-            contact_no_vel = -0.45
+            # 核心任务奖励：恰好一脚触地即得正向激励
+            # 从训练日志可知，约 45% 的时间已达成单腿接触，但奖励被淹没；
+            # 大幅提权，使正向信号主导每步总奖励。
+            single_leg_contact = 8.0
+
+            # 存活奖励：提高基础正向底线，保证每步不被裁到 0
+            alive = 3.0
+
+            # ── 姿态惩罚（减小，适配 29 DOF 与单腿平衡需求）─────────────
+
+            # 单腿平衡需要躯干适度倾斜和角动量调节，放宽姿态限制
+            orientation = -0.2       # 原 -1.0，减小 5x
+
+            # 重心高度维持（scale 减小，避免过度惩罚过渡动作）
+            base_height = -3.0       # 原 -8.0，减小
+
+            # z 方向速度（防止跳动，但不需太强）
+            lin_vel_z = -0.5         # 原 -2.0，减小 4x
+
+            # 单腿平衡依赖 roll/pitch 角速度调节，大幅放宽
+            ang_vel_xy = -0.005      # 原 -0.05，减小 10x
+
+            # 关节加速度：29 DOF 总量放大，需按 DOF 比例缩放
+            dof_acc = -2.5e-8        # 原 -2.5e-7，减小 10x（29/12 ≈ 2.4，额外留余量）
+
+            # 关节速度：同上，29 DOF 总量放大
+            dof_vel = -1e-4          # 原 -1e-3，减小 10x
+
+            # 动作变化率：适度平滑，不过度限制探索
+            action_rate = -0.002     # 原 -0.01，减小 5x
+
+            # 关节位置限制：保留但减小
+            dof_pos_limits = -1.0    # 原 -5.0，减小 5x
+
+            # 髋关节偏移：适当放宽，单腿需要髋部参与平衡
+            hip_pos = -0.2           # 原 -1.0，减小 5x
+
+            # 触地时脚部速度：放宽，单腿站立时支撑脚可能有微动
+            contact_no_vel = -0.05   # 原 -0.45，减小 9x
+
+            # 力矩：29 DOF 总量放大，略微减小
+            torques = -5e-6          # 原 -1e-5，减小 2x
 
 
 class G1SingleLegCfgPPO(G1RoughCfgPPO):
