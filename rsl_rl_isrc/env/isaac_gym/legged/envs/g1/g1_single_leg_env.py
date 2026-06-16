@@ -49,6 +49,11 @@ _MIN_STAND_HEIGHT = 0.5
 #   < -0.5 ⟺ 躯干倾斜 < 60°（cos60° = 0.5）。
 _MIN_UPRIGHT_GRAVITY_Z = -0.5
 
+# single_leg_contact 奖励的 yaw 软门控标准差（rad/s）。
+# 旋转超过此值时奖励按高斯曲线折扣：σ=0.25 rad/s 意味着
+#   0.25 rad/s → 奖励 × 0.607，0.5 rad/s → ×0.135，1.0 rad/s → ×0.0003
+_YAW_GATE_SIGMA = 0.25
+
 # 29dof URDF 关节顺序：
 #   0-5:  左腿 (hip_pitch/roll/yaw, knee, ankle_pitch/roll)
 #   6-11: 右腿 (同上)
@@ -136,7 +141,22 @@ class G1SingleLegRobot(G1Robot):
         # root_states[:, 2] 为骨盆质心世界坐标 z（近似等于骨盆高度）
         is_high_enough = self.root_states[:, 2] > _MIN_STAND_HEIGHT            # (E,) bool
 
-        return (single_leg & is_upright & is_high_enough).float()
+        # ── Yaw 软门控：旋转时按比例折扣单腿奖励 ──────────────────────
+        # 机器人发现高速旋转可借角动量维持平衡。用单独的 ang_vel_z 惩罚
+        # 无效（0.3 rad/s 时惩罚 < 1% 单腿奖励），因此直接让旋转削减
+        # 主奖励本身，使旋转策略在数学上不再最优。
+        #
+        # 高斯门控：reward × exp(-yaw²/(2σ²))，σ = 0.25 rad/s
+        #   0.0 rad/s → ×1.00（全额）
+        #   0.1 rad/s → ×0.96（几乎无影响，允许微调）
+        #   0.3 rad/s → ×0.49（当前旋转速度，奖励减半！）
+        #   0.5 rad/s → ×0.14（慢旋转，奖励剩 14%）
+        #   1.0 rad/s → ×0.0003（快旋转，奖励近乎为零）
+        yaw_gate = torch.exp(
+            -torch.square(self.base_ang_vel[:, 2]) / (2.0 * _YAW_GATE_SIGMA ** 2)
+        )                                                                        # (E,)
+
+        return (single_leg & is_upright & is_high_enough).float() * yaw_gate
 
     def _reward_ang_vel_z(self) -> torch.Tensor:
         """惩罚躯干偏航（yaw）角速度，阻止通过转圈来维持平衡。
