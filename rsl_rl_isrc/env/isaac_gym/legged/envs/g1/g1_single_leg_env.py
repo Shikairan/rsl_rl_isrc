@@ -27,6 +27,12 @@
     来维持平衡。基类 ``_reward_ang_vel_xy`` 只覆盖俯仰/侧滚，
     本函数专门补充 yaw 轴约束。
     计算：``base_ang_vel[:, 2]²``（与 ang_vel_xy 形式一致）。
+
+``_reward_swing_leg_height``：
+    奖励摆动腿（非支撑腿）的脚踝高度高于支撑腿，阻止机器人通过
+    "双脚交替站立"来刷分。若仅做左右重心交替，摆动腿几乎不抬起，
+    相对高度接近 0，无法获得此奖励；真正单腿站立并将摆动腿抬高
+    才能持续获益。计算：摆动脚踝相对支撑脚踝的高度差，上限 0.15 m。
 """
 
 import torch
@@ -96,3 +102,44 @@ class G1SingleLegRobot(G1Robot):
             shape ``(num_envs,)`` 的 float tensor：``base_ang_vel[:, 2]²``。
         """
         return torch.square(self.base_ang_vel[:, 2])
+
+    def _reward_swing_leg_height(self) -> torch.Tensor:
+        """奖励摆动腿脚踝高度高于支撑腿，阻止双脚快速交替刷分。
+
+        机器人若仅做重心左右交替（双脚轮流轻点地），每次切换时
+        XOR 条件短暂成立，但摆动脚几乎不离地，相对高度差 ≈ 0，
+        本奖励为 0。真正单腿站立并将摆动腿悬空才能持续获益。
+
+        计算逻辑：
+        - 支撑腿 = 有地面接触力的脚（z 分量 > 1 N）
+        - 摆动腿 = 另一只脚
+        - reward = clamp(摆动脚踝 z − 支撑脚踝 z, 0, 0.15)
+        - 仅在单脚 XOR 条件成立时有效（与 single_leg_contact 联动）
+
+        Returns:
+            shape ``(num_envs,)`` 的 float tensor：
+            摆动腿相对支撑腿抬高高度（m），范围 [0, 0.15]。
+        """
+        left_contact  = self.contact_forces[:, self.feet_indices[0], 2] > 1.0  # (E,)
+        right_contact = self.contact_forces[:, self.feet_indices[1], 2] > 1.0  # (E,)
+        single_leg    = left_contact ^ right_contact                            # (E,)
+
+        # 脚踝在世界坐标系中的 z 高度
+        left_height  = self.feet_pos[:, 0, 2]   # (E,) 左脚踝高度
+        right_height = self.feet_pos[:, 1, 2]   # (E,) 右脚踝高度
+
+        # 当左脚是支撑腿（left_contact=True）时，摆动腿=右脚
+        # 奖励 = clamp(right_height - left_height, 0, 0.15)
+        right_swing_rel = torch.clamp(right_height - left_height, min=0., max=0.15)
+
+        # 当右脚是支撑腿（right_contact=True）时，摆动腿=左脚
+        # 奖励 = clamp(left_height - right_height, 0, 0.15)
+        left_swing_rel  = torch.clamp(left_height - right_height, min=0., max=0.15)
+
+        # 合并：只在对应腿为摆动腿时有效，且仅在单脚条件成立时计入
+        swing_reward = (
+            right_swing_rel * left_contact.float()   # 左为支撑，奖励右脚高度
+            + left_swing_rel  * right_contact.float() # 右为支撑，奖励左脚高度
+        ) * single_leg.float()
+
+        return swing_reward
