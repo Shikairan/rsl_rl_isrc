@@ -1,6 +1,6 @@
 """单腿站立（任意一脚支撑）G1 环境。
 
-该 env 继承自 G1Robot，仅新增 ``_reward_single_leg_contact`` 奖励函数，
+该 env 继承自 G1Robot，新增以下两个专用奖励函数，
 其余行为（观测构造、物理回调、重置逻辑）完全复用父类实现，
 与行走任务互不干涉。
 
@@ -21,6 +21,12 @@
     接触判断阈值：法向接触力 z 分量 > 1 N（与基类 _reward_contact 一致）。
     倾斜门控阈值：projected_gravity[:, 2] < -0.5（躯干倾斜不超过 60°）。
     高度门控阈值：base_height > 0.5 m。
+
+``_reward_ang_vel_z``：
+    惩罚躯干绕竖直轴（偏航/yaw）的角速度，防止机器人通过持续转圈
+    来维持平衡。基类 ``_reward_ang_vel_xy`` 只覆盖俯仰/侧滚，
+    本函数专门补充 yaw 轴约束。
+    计算：``base_ang_vel[:, 2]²``（与 ang_vel_xy 形式一致）。
 """
 
 import torch
@@ -76,3 +82,17 @@ class G1SingleLegRobot(G1Robot):
         is_high_enough = self.root_states[:, 2] > _MIN_STAND_HEIGHT            # (E,) bool
 
         return (single_leg & is_upright & is_high_enough).float()
+
+    def _reward_ang_vel_z(self) -> torch.Tensor:
+        """惩罚躯干偏航（yaw）角速度，阻止通过转圈来维持平衡。
+
+        基类 ``_reward_ang_vel_xy`` 已惩罚俯仰（pitch）和侧滚（roll），
+        但未覆盖偏航轴（z 轴）。机器人发现持续旋转可以借助角动量
+        维持单腿平衡，形成投机策略。本奖励以二次方形式惩罚 yaw 角速度：
+        慢速小幅修正（< 0.3 rad/s）惩罚极小，不影响正常平衡调整；
+        持续转圈（> 1 rad/s）将积累显著惩罚，超过单腿奖励收益。
+
+        Returns:
+            shape ``(num_envs,)`` 的 float tensor：``base_ang_vel[:, 2]²``。
+        """
+        return torch.square(self.base_ang_vel[:, 2])
