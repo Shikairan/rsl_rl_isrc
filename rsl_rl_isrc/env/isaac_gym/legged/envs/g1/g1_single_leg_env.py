@@ -54,6 +54,11 @@ _MIN_UPRIGHT_GRAVITY_Z = -0.5
 #   0.25 rad/s → 奖励 × 0.607，0.5 rad/s → ×0.135，1.0 rad/s → ×0.0003
 _YAW_GATE_SIGMA = 0.25
 
+# 摆动腿脚踝相对支撑腿脚踝的目标最大高度差（m）。
+# 超过此高度不再额外奖励，避免机器人抬腿过高影响平衡。
+# 5cm 足以区分"几乎不离地（双脚交替）"和"真正抬起"，无需过高。
+_SWING_LEG_MAX_HEIGHT = 0.05
+
 # 29dof URDF 关节顺序：
 #   0-5:  左腿 (hip_pitch/roll/yaw, knee, ankle_pitch/roll)
 #   6-11: 右腿 (同上)
@@ -198,12 +203,14 @@ class G1SingleLegRobot(G1Robot):
         right_height = self.feet_pos[:, 1, 2]   # (E,) 右脚踝高度
 
         # 当左脚是支撑腿（left_contact=True）时，摆动腿=右脚
-        # 奖励 = clamp(right_height - left_height, 0, 0.15)
-        right_swing_rel = torch.clamp(right_height - left_height, min=0., max=0.15)
+        right_swing_rel = torch.clamp(
+            right_height - left_height, min=0., max=_SWING_LEG_MAX_HEIGHT
+        )
 
         # 当右脚是支撑腿（right_contact=True）时，摆动腿=左脚
-        # 奖励 = clamp(left_height - right_height, 0, 0.15)
-        left_swing_rel  = torch.clamp(left_height - right_height, min=0., max=0.15)
+        left_swing_rel  = torch.clamp(
+            left_height - right_height, min=0., max=_SWING_LEG_MAX_HEIGHT
+        )
 
         # 合并：只在对应腿为摆动腿时有效，且仅在单脚条件成立时计入
         swing_reward = (
