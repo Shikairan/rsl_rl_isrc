@@ -13,29 +13,43 @@
 - 日志：``logs/g1_single_leg/<timestamp>_single_leg_ddp``
 - ZMQ 端口：PULL **15559** / REP **15560**（与行走 DDP 15555/15556 隔离）
 
+指定显卡（--gpu-ids）
+---------------------
+通过 ``--gpu-ids`` 控制参与训练的 GPU 编号（物理卡 ID），
+``torchrun --nproc_per_node`` 须与 GPU 数量一致。
+
+    # 使用第 0、2 号 GPU（2 卡）
+    torchrun --standalone --nnodes=1 --nproc_per_node=2 \\
+      rsl_rl_isrc/tests/test_ppo_g1_single_leg_ddp.py \\
+      --gpu-ids 0,2 --num-envs 1024 --max-iterations 10000
+
+    # 使用第 1、2、3 号 GPU（3 卡）
+    torchrun --standalone --nnodes=1 --nproc_per_node=3 \\
+      rsl_rl_isrc/tests/test_ppo_g1_single_leg_ddp.py \\
+      --gpu-ids 1,2,3 --num-envs 2048 --max-iterations 10000
+
+    # 不指定 --gpu-ids：使用系统默认前 N 张卡（与 CUDA_VISIBLE_DEVICES 一致）
+    torchrun --standalone --nnodes=1 --nproc_per_node=4 \\
+      rsl_rl_isrc/tests/test_ppo_g1_single_leg_ddp.py \\
+      --num-envs 2048 --max-iterations 10000
+
 单机 2 卡快速验证::
 
     torchrun --standalone --nnodes=1 --nproc_per_node=2 \\
       rsl_rl_isrc/tests/test_ppo_g1_single_leg_ddp.py \\
-      --num-envs 64 --max-iterations 5 --no-zmq-obs
-
-单机 4 卡正式训练::
-
-    torchrun --standalone --nnodes=1 --nproc_per_node=4 \\
-      rsl_rl_isrc/tests/test_ppo_g1_single_leg_ddp.py \\
-      --num-envs 2048 --max-iterations 10000
+      --gpu-ids 0,1 --num-envs 64 --max-iterations 5 --no-zmq-obs
 
 从 checkpoint 恢复::
 
     torchrun --standalone --nnodes=1 --nproc_per_node=2 \\
       rsl_rl_isrc/tests/test_ppo_g1_single_leg_ddp.py \\
-      --num-envs 64 --max-iterations 10000 --resume --load-run -1
+      --gpu-ids 0,1 --num-envs 64 --max-iterations 10000 --resume
 
 带 obs 监控（另开终端 ``zmq_obs_ctrl_client.py`` 连 15559/15560）::
 
     torchrun --standalone --nnodes=1 --nproc_per_node=2 \\
       rsl_rl_isrc/tests/test_ppo_g1_single_leg_ddp.py \\
-      --num-envs 128 --max-iterations 5 --print-obs
+      --gpu-ids 0,1 --num-envs 128 --max-iterations 5 --print-obs
 """
 
 from __future__ import annotations
@@ -51,6 +65,49 @@ package_root = os.path.dirname(script_dir)
 project_root = os.path.dirname(package_root)
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
+
+
+def _configure_visible_gpus() -> str | None:
+    """从 sys.argv 预提取 ``--gpu-ids`` 并提前设置 ``CUDA_VISIBLE_DEVICES``。
+
+    此函数必须在 ``_bootstrap_isaac_before_torch()`` **之前**调用，确保 CUDA 驱动
+    在初始化时已看到正确的设备集合。
+
+    优先级：
+        ``--gpu-ids`` CLI 参数 > ``CUDA_VISIBLE_DEVICES`` 环境变量 > 不限制（使用所有卡）
+
+    Returns:
+        实际生效的 GPU ID 字符串（如 ``"0,2,3"``），若未指定则返回 None。
+    """
+    gpu_ids: str | None = None
+    argv = sys.argv[1:]
+    for i, arg in enumerate(argv[:-1]):
+        if arg in ("--gpu-ids", "--gpu_ids"):
+            gpu_ids = argv[i + 1].strip()
+            break
+
+    if gpu_ids is not None:
+        os.environ["CUDA_VISIBLE_DEVICES"] = gpu_ids
+        ids = [g.strip() for g in gpu_ids.split(",") if g.strip()]
+        world_size = int(os.environ.get("WORLD_SIZE", "1"))
+        rank = int(os.environ.get("RANK", "0"))
+        if rank == 0:
+            print(
+                f"[rank0] CUDA_VISIBLE_DEVICES={gpu_ids}，"
+                f"可用 {len(ids)} 张 GPU（物理 ID: {ids}）"
+            )
+        if world_size > 1 and len(ids) != world_size:
+            if rank == 0:
+                print(
+                    f"[rank0] 警告: --gpu-ids 指定了 {len(ids)} 张卡，"
+                    f"但 torchrun WORLD_SIZE={world_size}，"
+                    f"建议 --nproc_per_node 与 GPU 数量一致。",
+                    file=sys.stderr,
+                )
+        return gpu_ids
+
+    # 未传 --gpu-ids，沿用环境变量（若有）
+    return os.environ.get("CUDA_VISIBLE_DEVICES")
 
 
 def _apply_numpy_isaac_compat() -> None:
@@ -138,6 +195,7 @@ def run_g1_single_leg_ddp_training(
     rank: int,
     world_size: int,
     seed: int,
+    gpu_ids: str | None = None,
 ) -> None:
     """在单机多 GPU 上训练 G1 单腿站立任务（DDP）。
 
@@ -160,6 +218,7 @@ def run_g1_single_leg_ddp_training(
         rank: 当前进程 global rank。
         world_size: 总进程数。
         seed: 基础随机种子（各 rank 实际 seed = seed + rank）。
+        gpu_ids: 生效的 CUDA_VISIBLE_DEVICES 字符串（如 ``"0,2,3"``），仅用于日志打印。
     """
     _check_isaac_cuda(local_rank=int(device.split(":")[-1]))
 
@@ -205,10 +264,21 @@ def run_g1_single_leg_ddp_training(
     )
 
     if rank == 0:
+        import torch
+        gpu_info = gpu_ids if gpu_ids else os.environ.get("CUDA_VISIBLE_DEVICES", "all")
+        phys_ids = [g.strip() for g in gpu_ids.split(",")] if gpu_ids else [
+            str(i) for i in range(torch.cuda.device_count())
+        ]
         print(
-            f"[rank0] 单腿站立 DDP 训练: "
-            f"task=single_leg  asset={cfg.asset.file}  "
-            f"world_size={world_size}  每卡 envs={num_envs}  总 envs={num_envs * world_size}"
+            f"[rank0] 单腿站立 DDP 训练:\n"
+            f"  task=single_leg  asset={cfg.asset.file}\n"
+            f"  CUDA_VISIBLE_DEVICES={gpu_info}\n"
+            f"  GPU 分配: " + ", ".join(
+                f"rank{i}→物理GPU{phys_ids[i] if i < len(phys_ids) else '?'}"
+                f"(cuda:{i})"
+                for i in range(world_size)
+            ) + f"\n"
+            f"  world_size={world_size}  每卡 envs={num_envs}  总 envs={num_envs * world_size}"
         )
         if enable_obs_server and runner.obs_server is not None:
             instr = runner.get_instruction()
@@ -348,14 +418,35 @@ def _parse_args() -> argparse.Namespace:
         default=1,
         help="基础随机种子（各 rank 实际 seed = seed + rank）",
     )
+    parser.add_argument(
+        "--gpu-ids",
+        type=str,
+        default=None,
+        metavar="ID[,ID,...]",
+        help=(
+            "指定参与训练的 GPU 物理编号，逗号分隔（如 '0,2,3'）。"
+            "脚本内部将其设为 CUDA_VISIBLE_DEVICES，"
+            "LOCAL_RANK 0→第一个 ID，LOCAL_RANK 1→第二个 ID，以此类推。"
+            "此参数须在任何 CUDA 初始化前生效，已在 main() 最开头预处理。"
+            "torchrun --nproc_per_node 须与 GPU 数量一致。"
+            "不指定时沿用系统 CUDA_VISIBLE_DEVICES 或使用所有可用 GPU。"
+        ),
+    )
     return parser.parse_args()
 
 
 def main() -> None:
-    args = _parse_args()
+    # ── 第一步：必须在任何 CUDA 初始化前设置可见 GPU ────────────────────────
+    # _configure_visible_gpus() 从 sys.argv 中预提取 --gpu-ids 并写入
+    # CUDA_VISIBLE_DEVICES，之后 isaacgym bootstrap 和 torch.distributed
+    # 才能感知到正确的设备集合。
+    gpu_ids = _configure_visible_gpus()
 
-    # isaacgym 必须在 torch.distributed 初始化（import torch）之前导入
+    # ── 第二步：isaacgym 必须在 torch.distributed 初始化之前导入 ────────────
     _bootstrap_isaac_before_torch()
+
+    # ── 第三步：解析完整参数（--gpu-ids 已在上面预处理，此处正常解析） ─────
+    args = _parse_args()
 
     from rsl_rl_isrc.utils.distributed import (
         cleanup_distributed,
@@ -394,6 +485,7 @@ def main() -> None:
             rank=rank,
             world_size=world_size,
             seed=args.seed,
+            gpu_ids=gpu_ids,
         )
     finally:
         cleanup_distributed()
