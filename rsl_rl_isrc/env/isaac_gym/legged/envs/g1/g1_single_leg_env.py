@@ -49,13 +49,62 @@ _MIN_STAND_HEIGHT = 0.5
 #   < -0.5 ⟺ 躯干倾斜 < 60°（cos60° = 0.5）。
 _MIN_UPRIGHT_GRAVITY_Z = -0.5
 
+# 29dof URDF 关节顺序：
+#   0-5:  左腿 (hip_pitch/roll/yaw, knee, ankle_pitch/roll)
+#   6-11: 右腿 (同上)
+#   12-14: 腰部 (waist_yaw/roll/pitch)
+#   15-21: 左臂 (shoulder_pitch/roll/yaw, elbow, wrist_roll/pitch/yaw)
+#   22-28: 右臂 (同上)
+# 只对腿部 12 个关节施加速度/加速度/动作变化惩罚，
+# 腰部和手臂可自由运动辅助平衡。
+_NUM_LEG_JOINTS = 12
+
 
 class G1SingleLegRobot(G1Robot):
     """单腿站立（任意一脚支撑）G1 机器人环境。
 
-    在 ``G1Robot`` 基础上扩展 ``_reward_single_leg_contact``，
-    配合 ``G1SingleLegCfg`` 中的奖励权重使用。
+    在 ``G1Robot`` 基础上扩展专用奖励函数，配合 ``G1SingleLegCfg`` 使用。
+
+    关键设计：
+    - 腿部关节速度/加速度/动作率惩罚仅作用于前 12 个关节（腿部），
+      腰部和手臂可自由运动辅助平衡（不受上述惩罚约束）。
+    - 通过 ``stance_leg`` buffer 追踪当前支撑腿，换脚时给予一次性大惩罚。
     """
+
+    def _init_buffers(self) -> None:
+        super()._init_buffers()
+        # 支撑腿追踪：-1 = 无有效单腿支撑，0 = 左脚，1 = 右脚
+        self.stance_leg = torch.full(
+            (self.num_envs,), -1, dtype=torch.long, device=self.device
+        )
+
+    def reset_idx(self, env_ids) -> None:
+        super().reset_idx(env_ids)
+        # 环境重置时清空支撑腿记录，避免跨 episode 误判换脚
+        self.stance_leg[env_ids] = -1
+
+    # ── 覆盖基类惩罚：只约束腿部关节，解放手臂 ──────────────────────────
+
+    def _reward_dof_vel(self) -> torch.Tensor:
+        """只惩罚腿部（前 12 个）关节速度，手臂可自由摆动辅助平衡。"""
+        return torch.sum(torch.square(self.dof_vel[:, :_NUM_LEG_JOINTS]), dim=1)
+
+    def _reward_dof_acc(self) -> torch.Tensor:
+        """只惩罚腿部关节角加速度（速度突变），手臂不受限制。"""
+        leg_diff = (
+            self.last_dof_vel[:, :_NUM_LEG_JOINTS]
+            - self.dof_vel[:, :_NUM_LEG_JOINTS]
+        ) / self.dt
+        return torch.sum(torch.square(leg_diff), dim=1)
+
+    def _reward_action_rate(self) -> torch.Tensor:
+        """只惩罚腿部动作变化率，手臂动作可快速调整以辅助平衡。"""
+        return torch.sum(torch.square(
+            self.last_actions[:, :_NUM_LEG_JOINTS]
+            - self.actions[:, :_NUM_LEG_JOINTS]
+        ), dim=1)
+
+    # ── 单腿站立专用奖励 ──────────────────────────────────────────────────
 
     def _reward_single_leg_contact(self) -> torch.Tensor:
         """奖励恰好一只脚触地且躯干保持站立姿态。
@@ -143,3 +192,37 @@ class G1SingleLegRobot(G1Robot):
         ) * single_leg.float()
 
         return swing_reward
+
+    def _reward_stance_switch(self) -> torch.Tensor:
+        """换脚（支撑腿切换）时给予一次性大惩罚，阻止双脚交替刷分。
+
+        追踪每个 env 当前的支撑腿（左=0 / 右=1 / 无=-1）。
+        当检测到从一个有效单腿支撑切换到另一个有效单腿支撑时，
+        返回 1.0（配合 config 中的大负 scale 产生一次性强烈惩罚）。
+
+        逻辑：
+        - 只在双腿均为「纯单腿」（XOR 成立）时才更新和比较
+        - 从无效状态（腾空/双脚）切换到单腿不算换脚
+        - 环境重置时（reset_idx）清空记录，避免跨 episode 误判
+
+        Returns:
+            shape ``(num_envs,)`` float tensor：发生换脚时为 1.0，否则为 0.0。
+        """
+        left_contact  = self.contact_forces[:, self.feet_indices[0], 2] > 1.0
+        right_contact = self.contact_forces[:, self.feet_indices[1], 2] > 1.0
+
+        left_only  = left_contact  & ~right_contact   # 左脚单腿支撑
+        right_only = right_contact & ~left_contact    # 右脚单腿支撑
+        curr_valid = left_only | right_only            # 当前有有效单腿支撑
+
+        # 当前支撑腿编号：左=0，右=1（仅 curr_valid 时有意义）
+        curr_stance = right_only.long()   # left_only → 0，right_only → 1
+
+        # 换脚判断：上一步有有效支撑 且 本步有有效支撑 且 支撑腿发生变化
+        prev_valid = self.stance_leg >= 0
+        switched = prev_valid & curr_valid & (curr_stance != self.stance_leg)
+
+        # 只在有效单腿支撑时才更新 stance_leg（腾空/双脚时保留上次记录）
+        self.stance_leg = torch.where(curr_valid, curr_stance, self.stance_leg)
+
+        return switched.float()

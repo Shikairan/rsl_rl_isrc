@@ -69,6 +69,12 @@ class G1SingleLegCfg(G1RoughCfg):
             # 计算：摆动脚踝相对支撑脚踝高度差（0~0.15m，见 _reward_swing_leg_height）。
             swing_leg_height = 5.0
 
+            # 换脚惩罚（一次性大惩罚）：机器人切换支撑腿时触发一次 -1.0 惩罚。
+            # scale=-50 → 每次换脚代价 = -50 × 1.0 × dt(0.02) = -1.0
+            # 等效于损失约 9 步 single_leg_contact 奖励（0.112/步）。
+            # 若机器人每 3 步换一次脚：-1.0/3步 ≈ -0.33/步，远超单腿奖励，强烈抑制。
+            stance_switch = -50.0
+
             # 存活奖励：提高基础正向底线，保证每步不被裁到 0
             alive = 3.0
 
