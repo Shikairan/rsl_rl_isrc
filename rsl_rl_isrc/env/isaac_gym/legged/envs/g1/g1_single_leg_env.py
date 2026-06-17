@@ -40,8 +40,10 @@ import torch
 from rsl_rl_isrc.env.isaac_gym.legged.envs.g1.g1_env import G1Robot
 
 # 单腿站立奖励生效的最低骨盆高度（m）。
-# 正常站立：~0.72-0.78m；仰卧倒地：~0.2-0.4m。
-_MIN_STAND_HEIGHT = 0.5
+# 仰卧倒地骨盆高度通常 0.2-0.35m，本门控只用于拒绝仰卧刷分。
+# 0.4m 仍足以区分"仰卧（0.25m）"和"正常蹲立（0.55m+）"，
+# 且不会阻碍机器人为稳定而适度弯膝蹲低（自然单腿高度约 0.60-0.66m）。
+_MIN_STAND_HEIGHT = 0.4
 
 # projected_gravity z 分量门控阈值。
 # projected_gravity = quat_rotate_inverse(base_quat, [0,0,-1])
@@ -254,3 +256,21 @@ class G1SingleLegRobot(G1Robot):
         self.stance_leg = torch.where(curr_valid, curr_stance, self.stance_leg)
 
         return switched.float()
+
+    def _reward_arm_pos(self) -> torch.Tensor:
+        """轻微惩罚手臂关节偏离零位，防止手臂去到极端位置触发关节限位。
+
+        手臂被完全解除了速度/加速度约束（_reward_dof_vel 等只惩罚腿部），
+        但 dof_pos_limits 仍对全部 29 个关节生效。若手臂长期停在极限附近，
+        会持续产生 dof_pos_limits 惩罚并可能影响仿真稳定性。
+        本奖励以极小权重（scale=-0.05）轻推手臂回到中性位，
+        不限制手臂的平衡摆动能力，只防止长期极端姿态。
+
+        手臂关节索引（29dof）：15-28（左臂 15-21，右臂 22-28）。
+
+        Returns:
+            shape ``(num_envs,)`` float tensor：手臂关节角度平方和。
+        """
+        # 手臂关节：索引 15 至末尾（共 14 个）
+        arm_pos = self.dof_pos[:, 15:]   # (E, 14)
+        return torch.sum(torch.square(arm_pos), dim=1)

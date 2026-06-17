@@ -40,8 +40,11 @@ class G1SingleLegCfg(G1RoughCfg):
     class rewards(G1RoughCfg.rewards):
         """奖励设计：正向信号主导，负向惩罚适配 29 DOF 量级。"""
 
-        # 单腿站立目标重心高度（略低于行走 0.78，重心更稳）
-        base_height_target = 0.72
+        # 单腿站立目标重心高度。
+        # 分析 iter8892 日志（base_height=-0.0839）推断机器人自然单腿站立高度约 0.66m，
+        # 而目标 0.72m 持续将机器人拉向较高姿态 → 重心高 → 不稳 → 无法突破 500 步。
+        # 改为 0.65m 匹配自然站姿，减少高度惩罚，让机器人找到稳定的低重心姿态。
+        base_height_target = 0.65
 
         class scales(G1RoughCfg.rewards.scales):
             # ── 禁用行走奖励 ──────────────────────────────────────────────
@@ -86,8 +89,11 @@ class G1SingleLegCfg(G1RoughCfg):
             # 单腿平衡需要躯干适度倾斜和角动量调节，放宽姿态限制
             orientation = -0.2       # 原 -1.0，减小 5x
 
-            # 重心高度维持（scale 减小，避免过度惩罚过渡动作）
-            base_height = -3.0       # 原 -8.0，减小
+            # 重心高度维持。
+            # iter8892 分析：base_height=-0.0839 是最大负向项（占总负向 21%），
+            # 高度目标与自然站姿(~0.65m)不符，scale=-3.0 过强导致恶性循环。
+            # 改为 -1.0：保留引导方向但不强制高度，让机器人自然找到稳定站姿。
+            base_height = -1.0       # 原 -3.0，大幅减小
 
             # z 方向速度（防止跳动，但不需太强）
             lin_vel_z = -0.5         # 原 -2.0，减小 4x
@@ -127,6 +133,11 @@ class G1SingleLegCfg(G1RoughCfg):
 
             # 力矩：29 DOF 总量放大，略微减小
             torques = -5e-6          # 原 -1e-5，减小 2x
+
+            # 手臂关节位置正则化（防止手臂长期停在极端位置触发 dof_pos_limits）。
+            # scale 极小（-0.05），只防止极端，不限制平衡摆动。
+            # iter8892 日志 dof_pos_limits=-0.0273，手臂极端位置是原因之一。
+            arm_pos = -0.05
 
 
 class G1SingleLegCfgPPO(G1RoughCfgPPO):
