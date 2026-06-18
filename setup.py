@@ -32,6 +32,14 @@ setup(
             "tqdm>=4.60",
             "gymnasium>=0.28.0",
         ],
+        "marl": [
+            "onpolicy @ git+https://github.com/marlbenchmark/on-policy.git",
+            "tensorboardX>=2.0",
+            "gym<0.24",
+            "seaborn>=0.10",
+            "wandb>=0.10",
+            "imageio>=2.4",
+        ],
     },
     keywords="reinforcement learning, pytorch, ppo, trpo, sac, rsl_rl",
 )
