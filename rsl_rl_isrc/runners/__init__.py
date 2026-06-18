@@ -12,3 +12,4 @@ from .trpo_runner import TRPORunner
 from .sac_runner import SACRunner
 from .ddpg_runner import DDPGRunner
 from .td3_runner import TD3Runner
+from .dqn_runner import DQNRunner

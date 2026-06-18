@@ -9,3 +9,4 @@
 
 from .rollout_storage import RolloutStorage
 from .replay_buffer import ReplayBuffer
+from .discrete_replay_buffer import DiscreteReplayBuffer

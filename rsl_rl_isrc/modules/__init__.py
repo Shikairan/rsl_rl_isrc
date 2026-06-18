@@ -13,3 +13,4 @@ from .trpo_networks import TrpoPolicy, TrpoValueFunction, TrpoPolicyRecurrent, T
 from .sac_networks import SACNetworks
 from .ddpg_networks import DDPGNetworks
 from .td3_networks import TD3Networks
+from .dqn_networks import DQNNetworks
