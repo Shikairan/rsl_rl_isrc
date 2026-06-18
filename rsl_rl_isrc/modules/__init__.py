@@ -11,3 +11,5 @@ from .actor_critic_recurrent import ActorCriticRecurrent
 from .single_module import SingleActor, SingleActorRecurrent
 from .trpo_networks import TrpoPolicy, TrpoValueFunction, TrpoPolicyRecurrent, TrpoValueFunctionRecurrent
 from .sac_networks import SACNetworks
+from .ddpg_networks import DDPGNetworks
+from .td3_networks import TD3Networks

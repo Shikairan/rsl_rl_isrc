@@ -10,3 +10,5 @@ from .on_policy_runner import OnPolicyRunner
 from .reinforce_runner import REINFORCERunner
 from .trpo_runner import TRPORunner
 from .sac_runner import SACRunner
+from .ddpg_runner import DDPGRunner
+from .td3_runner import TD3Runner
