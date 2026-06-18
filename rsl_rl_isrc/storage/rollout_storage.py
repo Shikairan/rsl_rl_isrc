@@ -252,6 +252,49 @@ class RolloutStorage:
             self.advantages = self.advantages - adv_mean  # 只中心化，不缩放
         
 
+    def compute_n_step_returns(self, last_values, gamma, n_steps, num_steps=None):
+        """计算 n-step 回报与优势（A3C 常用，替代 GAE）。
+
+        对时间步 ``t``：
+        ``R_t = Σ_{k=0}^{n-1} γ^k r_{t+k} + γ^n V(s_{t+n})``（遇 done 或缓冲末尾则提前 bootstrap）。
+        """
+        if num_steps is None:
+            num_steps = self.step
+        if num_steps <= 0:
+            return
+
+        for t in range(num_steps):
+            R = torch.zeros_like(self.values[t])
+            discount = 1.0
+            truncated = False
+            for k in range(n_steps):
+                step_idx = t + k
+                if step_idx >= num_steps:
+                    R = R + discount * last_values
+                    truncated = True
+                    break
+                R = R + discount * self.rewards[step_idx]
+                if self.dones[step_idx]:
+                    truncated = True
+                    break
+                discount = discount * gamma
+            if not truncated:
+                boot_idx = t + n_steps
+                if boot_idx < num_steps:
+                    R = R + (gamma ** n_steps) * self.values[boot_idx]
+                else:
+                    R = R + (gamma ** n_steps) * last_values
+            self.returns[t] = R
+
+        self.advantages[:num_steps] = self.returns[:num_steps] - self.values[:num_steps]
+        adv = self.advantages[:num_steps]
+        adv_mean = adv.mean()
+        adv_std = adv.std()
+        if adv_std > 1e-3:
+            self.advantages[:num_steps] = (adv - adv_mean) / (adv_std + 1e-8)
+        else:
+            self.advantages[:num_steps] = adv - adv_mean
+
     def get_statistics(self):
         done = self.dones
         done[-1] = 1
