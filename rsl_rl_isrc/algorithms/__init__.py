@@ -7,6 +7,7 @@
 """汇总导出 PPO、REINFORCEPolicy、TRPO、TRPOPolicy、SAC 等算法类。"""
 
 from .ppo import PPO
+from .a2c import A2C
 from .reinforce_policy import REINFORCEPolicy
 from .trpo import TRPO
 from .trpo_policy import TRPOPolicy

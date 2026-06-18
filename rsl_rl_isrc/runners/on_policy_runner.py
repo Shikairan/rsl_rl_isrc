@@ -4,9 +4,9 @@
 # 致谢：rsl_rl 原团队；本仓库由 ISRC 在独立包名 rsl_rl_isrc 下维护与扩展。
 # License: BSD-3-Clause（见仓库根目录及 setup.py）。
 #
-"""PPO 训练运行器模块。
+"""PPO / A2C 训练运行器模块。
 
-负责与环境 ``VecEnv`` 交互、``PPO`` 算法更新、分布式下参数 ``broadcast``、
+负责与环境 ``VecEnv`` 交互、on-policy 算法更新、分布式下参数 ``broadcast``、
 TensorBoard 日志，以及可选的 ZMQ 遥测（``StepObsPublisher`` → ``ObsInstrServer``）。
 """
 
@@ -17,7 +17,7 @@ from typing import Callable, Optional
 import statistics
 from torch.utils.tensorboard import SummaryWriter
 import torch
-from rsl_rl_isrc.algorithms import PPO
+from rsl_rl_isrc.algorithms import PPO, A2C
 from rsl_rl_isrc.modules import ActorCritic, ActorCriticRecurrent
 from rsl_rl_isrc.env import VecEnv
 from rsl_rl_isrc.sockets import StepObsPublisher
@@ -25,7 +25,7 @@ import torch.distributed as dist
 
 
 class OnPolicyRunner:
-    """封装 PPO 训练：构建 ``ActorCritic``、``PPO``、驱动 ``learn`` 与检查点/日志。"""
+    """封装 PPO / A2C 训练：构建 ``ActorCritic``、算法实例、驱动 ``learn`` 与检查点/日志。"""
 
     def __init__(self,
                  env: VecEnv,
@@ -51,6 +51,7 @@ class OnPolicyRunner:
         }
         _alg_registry = {
             "PPO": PPO,
+            "A2C": A2C,
         }
         policy_class_name = self.policy_cfg.get("policy_class_name", "ActorCritic")
         alg_class_name    = self.alg_cfg.get("algorithm_class_name", "PPO")
@@ -67,7 +68,7 @@ class OnPolicyRunner:
         ).to(self.device)
         self.world_size = dist.get_world_size() if dist.is_initialized() else 1
         alg_kwargs = {k: v for k, v in self.alg_cfg.items() if k != "algorithm_class_name"}
-        self.alg: PPO = alg_class(actor_critic, device=self.device, **alg_kwargs)
+        self.alg = alg_class(actor_critic, device=self.device, **alg_kwargs)
         self.num_steps_per_env = self.cfg["num_steps_per_env"]
         self.save_interval = self.cfg["save_interval"]
 
