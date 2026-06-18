@@ -8,6 +8,7 @@
 
 from .ppo import PPO
 from .a2c import A2C
+from .a3c import A3C
 from .reinforce_policy import REINFORCEPolicy
 from .trpo import TRPO
 from .trpo_policy import TRPOPolicy

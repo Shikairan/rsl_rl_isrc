@@ -7,6 +7,7 @@
 """训练运行器：On-policy、REINFORCE、TRPO、SAC。"""
 
 from .on_policy_runner import OnPolicyRunner
+from .a3c_runner import A3CRunner
 from .reinforce_runner import REINFORCERunner
 from .trpo_runner import TRPORunner
 from .sac_runner import SACRunner
