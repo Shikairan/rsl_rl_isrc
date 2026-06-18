@@ -99,6 +99,7 @@ class TestA3CRunner(unittest.TestCase):
 
             ckpt_path = os.path.join(log_dir, f"model_{rollouts_per_worker}.pt")
             self.assertTrue(os.path.isfile(ckpt_path))
+            runner.close()
 
         expected_rollouts = num_workers * rollouts_per_worker
         self.assertEqual(results["total_rollouts"], expected_rollouts)

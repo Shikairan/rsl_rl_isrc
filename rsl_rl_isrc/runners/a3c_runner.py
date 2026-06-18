@@ -170,6 +170,11 @@ class A3CRunner:
         self.current_learning_iteration = loaded.get("iter", 0)
         return loaded.get("infos")
 
+    def close(self):
+        if self.writer is not None:
+            self.writer.close()
+            self.writer = None
+
     def get_inference_policy(self, device=None):
         self.actor_critic.eval()
         if device is not None:
