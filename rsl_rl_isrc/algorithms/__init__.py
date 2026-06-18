@@ -12,3 +12,4 @@ from .trpo import TRPO
 from .trpo_policy import TRPOPolicy
 from .sac_policy import SAC
 from .ddpg_policy import DDPG
+from .td3_policy import TD3
