@@ -5,7 +5,7 @@
 
 export RSL_RL_ISRC_OBS_RELAY_URL='http://localhost:18888/post'
 
-依赖：已安装 Isaac Gym、CUDA；物理模型为 ``robotmodel/g1_description/g1_12dof.urdf``；
+依赖：已安装 Isaac Gym、CUDA；物理模型为 ``robotmodel/g1_description/g1_29dof.urdf``；
 仿真在 ``rsl_rl_isrc.env.isaac_gym.legged``。
 
 运行::

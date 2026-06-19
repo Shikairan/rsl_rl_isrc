@@ -17,8 +17,8 @@ _PROJECT_ROOT = os.path.dirname(_PACKAGE_ROOT)
 # 与 legged/__init__.py 一致的路径常量（不 import rsl_rl，避免先于 isaacgym 拉入 torch）
 _RSL_RL_ISRC_ROOT = _PACKAGE_ROOT
 G1_DESCRIPTION_DIR = os.path.join(_RSL_RL_ISRC_ROOT, "robotmodel", "g1_description")
-G1_XML_PATH = os.path.join(G1_DESCRIPTION_DIR, "g1_12dof.xml")
-G1_URDF_PATH = os.path.join(G1_DESCRIPTION_DIR, "g1_12dof.urdf")
+G1_XML_PATH = os.path.join(G1_DESCRIPTION_DIR, "g1_29dof.xml")
+G1_URDF_PATH = os.path.join(G1_DESCRIPTION_DIR, "g1_29dof.urdf")
 G1_MESH_DIR = os.path.join(G1_DESCRIPTION_DIR, "meshes")
 
 

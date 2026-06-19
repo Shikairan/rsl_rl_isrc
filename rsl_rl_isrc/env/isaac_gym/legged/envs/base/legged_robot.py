@@ -18,6 +18,11 @@ from rsl_rl_isrc.env.isaac_gym.legged.utils.isaacgym_utils import get_euler_xyz 
 from rsl_rl_isrc.env.isaac_gym.legged.utils.helpers import class_to_dict
 from .legged_robot_config import LeggedRobotCfg
 
+# Fall detection via projected_gravity z (body-frame gravity direction).
+# Upright ≈ -1; any direction tilt > 60° or lying on back ≈ +1.
+# Replaces asymmetric roll/pitch euler checks that missed backward falls.
+_FALL_PROJECTED_GRAVITY_Z = -0.5
+
 class LeggedRobot(BaseTask):
     def __init__(self, cfg: LeggedRobotCfg, sim_params, physics_engine, sim_device, headless):
         """ Parses the provided config file,
@@ -118,7 +123,9 @@ class LeggedRobot(BaseTask):
         """ Check if environments need to be reset
         """
         self.reset_buf = torch.any(torch.norm(self.contact_forces[:, self.termination_contact_indices, :], dim=-1) > 1., dim=1)
-        self.reset_buf |= torch.logical_or(torch.abs(self.rpy[:,1])>1.0, torch.abs(self.rpy[:,0])>0.8)
+        # Direction-agnostic fall: catches sideways (xy tilt) and backward (z flips positive).
+        is_fallen = self.projected_gravity[:, 2] > _FALL_PROJECTED_GRAVITY_Z
+        self.reset_buf |= is_fallen
         self.time_out_buf = self.episode_length_buf > self.max_episode_length # no terminal reward for time-outs
         self.reset_buf |= self.time_out_buf
 

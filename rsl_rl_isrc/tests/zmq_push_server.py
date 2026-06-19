@@ -4,8 +4,9 @@
 训练侧仍通过 HTTP 中继推送遥测；本脚本收到后与 ``http_post_server`` 相同地解析/预览，
 并额外将 body 经 ZMQ PUSH 转发给下游 PULL 消费者。
 
-ZMQ 对外格式：每 env 将 ``[base_pos, base_quat, dof_pos]`` 合并为单向量
-``[x, y, z, qx, qy, qz, qw, dof...]``（HTTP 终端预览仍为三段结构）。
+ZMQ 对外格式：各 env 的 ``[base_pos, base_quat, dof_pos]`` 先合并为
+``[x, y, z, qx, qy, qz, qw, dof...]``，再首尾拼成**一条**一维 list
+（HTTP 终端预览仍为三段结构）。
 
 用法::
 
@@ -32,6 +33,8 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import threading
+import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Any, Optional
 from urllib.parse import urlparse
@@ -81,10 +84,20 @@ def _merge_robot_pose_row(row: Any) -> list:
     return vec
 
 
+def _flat_merged_rows(merged_rows: list[list]) -> list:
+    """多个 env 合并向量 → 首尾相连的一维 list（跳过空 env）。"""
+    flat: list = []
+    for vec in merged_rows:
+        if vec:
+            flat.extend(vec)
+    return flat
+
+
 def _body_for_zmq_push(body: Any) -> Any:
-    """ZMQ 转发前扁平化；HTTP 打印仍使用原始 body。"""
+    """ZMQ 转发前扁平化为一维 list；HTTP 打印仍使用原始 body。"""
     if _is_robot_pose_payload(body):
-        return [_merge_robot_pose_row(row) for row in body]
+        merged = [_merge_robot_pose_row(row) for row in body]
+        return _flat_merged_rows(merged)
 
     if isinstance(body, dict) and body.get("type") == "obs_step":
         pos = body.get("base_pos") or []
@@ -106,7 +119,7 @@ def _body_for_zmq_push(body: Any) -> Any:
                 ):
                     vec.extend(field[i])
             merged.append(vec)
-        return merged
+        return _flat_merged_rows(merged)
 
     return body
 
@@ -228,7 +241,11 @@ def _print_payload_preview(
 
 
 class ZmqForwarder:
-    """ZMQ PUSH 客户端：connect 到下游 PULL bind 地址。"""
+    """ZMQ PUSH 客户端：connect 到下游 PULL bind 地址。
+
+    仅保留**最新一帧**待发送；新 HTTP POST 覆盖旧数据（丢最旧、留最新）。
+    后台线程非阻塞发往 ZMQ，下游慢时自动跳帧。
+    """
 
     def __init__(self, host: str, port: int) -> None:
         self._host = host
@@ -236,6 +253,12 @@ class ZmqForwarder:
         self._ctx: Optional[zmq.Context] = None
         self._push_sock: Optional[zmq.Socket] = None
         self._enabled = False
+        self._lock = threading.Lock()
+        self._latest: Optional[bytes] = None
+        self._version = 0
+        self._stop = threading.Event()
+        self._thread: Optional[threading.Thread] = None
+        self._superseded = 0
 
     @property
     def endpoint(self) -> str:
@@ -247,32 +270,66 @@ class ZmqForwarder:
         self._push_sock.connect(self.endpoint)
         self._push_sock.setsockopt(zmq.SNDTIMEO, 0)
         self._push_sock.setsockopt(zmq.LINGER, 0)
-        self._push_sock.setsockopt(zmq.SNDHWM, 100)
+        self._push_sock.setsockopt(zmq.SNDHWM, 500)
         self._enabled = True
+        self._stop.clear()
+        self._thread = threading.Thread(target=self._drain_loop, daemon=True)
+        self._thread.start()
 
     def forward(self, body: Any) -> bool:
-        if not self._enabled or self._push_sock is None:
+        if not self._enabled:
             return False
         try:
             zmq_body = _body_for_zmq_push(body)
             payload = json.dumps(zmq_body, ensure_ascii=False).encode("utf-8")
-            self._push_sock.send(payload, zmq.NOBLOCK)
-            return True
-        except zmq.Again:
-            print("[zmq_push_server] ZMQ PUSH 队列满，丢弃本条消息")
-            return False
         except Exception as exc:
-            print(f"[zmq_push_server] ZMQ PUSH 失败: {exc!r}")
+            print(f"[zmq_push_server] ZMQ 序列化失败: {exc!r}")
             return False
 
+        with self._lock:
+            if self._latest is not None:
+                self._superseded += 1
+            self._latest = payload
+            self._version += 1
+        return True
+
+    def _drain_loop(self) -> None:
+        while not self._stop.is_set():
+            with self._lock:
+                payload = self._latest
+                ver = self._version
+            if payload is None:
+                time.sleep(0.001)
+                continue
+            if self._push_sock is None:
+                break
+            try:
+                self._push_sock.send(payload, zmq.NOBLOCK)
+            except zmq.Again:
+                time.sleep(0.001)
+                continue
+            except Exception as exc:
+                if not self._stop.is_set():
+                    print(f"[zmq_push_server] ZMQ PUSH 失败: {exc!r}")
+                time.sleep(0.01)
+                continue
+
+            with self._lock:
+                if self._version == ver:
+                    self._latest = None
+
     def close(self) -> None:
+        self._enabled = False
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join(timeout=2.0)
+            self._thread = None
         if self._push_sock is not None:
             self._push_sock.close()
             self._push_sock = None
         if self._ctx is not None:
             self._ctx.term()
             self._ctx = None
-        self._enabled = False
 
 
 class PostHandler(BaseHTTPRequestHandler):
@@ -369,7 +426,8 @@ def run_server(
     print("  训练遥测:  export RSL_RL_ISRC_OBS_RELAY_URL=" + relay_url)
     if enable_zmq_push and forwarder is not None:
         print(f"[zmq_push_server] ZMQ PUSH → {forwarder.endpoint}")
-        print("  ZMQ 格式: 每 env 为 [x,y,z,qx,qy,qz,qw,dof...] 合并向量")
+        print("  ZMQ 格式: [env0_vec..., env1_vec..., ...] 一维拼平")
+        print("  ZMQ 策略: 仅保留最新一帧（下游慢时自动跳帧）")
         print("  下游请在上述地址 PULL bind")
     else:
         print("[zmq_push_server] ZMQ 转发已关闭（--no-zmq-push）")
@@ -385,6 +443,10 @@ def run_server(
         httpd.serve_forever()
     except KeyboardInterrupt:
         print(f"\n[zmq_push_server] 共接收 {PostHandler.server_count} 条 POST")
+        if forwarder is not None and forwarder._superseded:
+            print(
+                f"[zmq_push_server] ZMQ 跳帧（被更新覆盖）: {forwarder._superseded} 条"
+            )
     finally:
         httpd.server_close()
         if forwarder is not None:

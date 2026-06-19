@@ -2,7 +2,7 @@
 """Isaac Gym G1 + G1OnPolicyTestRunner PPO 训练（CPU 仿真与策略，单进程）。
 
 基于 ``test_ppo_g1_isaac.py``，默认 ``sim_device`` / ``runner.device`` 均为 ``cpu``，
-不强制 CUDA。物理模型仍为 ``robotmodel/g1_description/g1_12dof.urdf``。
+不强制 CUDA。物理模型仍为 ``robotmodel/g1_description/g1_29dof.urdf``。
 
 注意：CPU 并行环境数宜较小（默认 64）；全规模训练请用 GPU 版 ``test_ppo_g1_isaac.py``。
 
