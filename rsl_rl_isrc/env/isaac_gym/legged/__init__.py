@@ -9,8 +9,8 @@ _ENV_DIR = os.path.abspath(os.path.join(_PKG_DIR, "..", ".."))
 _RSL_RL_ISRC_ROOT = os.path.abspath(os.path.join(_ENV_DIR, ".."))
 
 G1_DESCRIPTION_DIR = os.path.join(_RSL_RL_ISRC_ROOT, "robotmodel", "g1_description")
-G1_URDF_PATH = os.path.join(G1_DESCRIPTION_DIR, "g1_12dof.urdf")
-G1_XML_PATH = os.path.join(G1_DESCRIPTION_DIR, "g1_12dof.xml")
+G1_URDF_PATH = os.path.join(G1_DESCRIPTION_DIR, "g1_29dof.urdf")
+G1_XML_PATH = os.path.join(G1_DESCRIPTION_DIR, "g1_29dof.xml")
 G1_MESH_DIR = os.path.join(G1_DESCRIPTION_DIR, "meshes")
 
 
@@ -25,7 +25,7 @@ def ensure_g1_meshes() -> str:
 
 
 def ensure_g1_urdf() -> str:
-    """校验 mesh 与 ``g1_12dof.urdf``，返回绝对路径（Isaac Gym 训练默认）。"""
+    """校验 mesh 与 ``g1_29dof.urdf``，返回绝对路径（Isaac Gym 训练默认）。"""
     ensure_g1_meshes()
     if not os.path.isfile(G1_URDF_PATH):
         raise FileNotFoundError(f"缺少 G1 URDF: {G1_URDF_PATH}")
@@ -33,7 +33,7 @@ def ensure_g1_urdf() -> str:
 
 
 def ensure_g1_xml() -> str:
-    """校验 mesh 与 ``g1_12dof.xml``，返回绝对路径（Mujoco 等）。"""
+    """校验 mesh 与 ``g1_29dof.xml``，返回绝对路径（Mujoco 等）。"""
     ensure_g1_meshes()
     if not os.path.isfile(G1_XML_PATH):
         raise FileNotFoundError(f"缺少 G1 MJCF: {G1_XML_PATH}")
@@ -41,5 +41,5 @@ def ensure_g1_xml() -> str:
 
 
 def ensure_g1_robot_assets() -> str:
-    """兼容旧名：Isaac 训练默认返回 ``g1_12dof.urdf`` 路径。"""
+    """兼容旧名：Isaac 训练默认返回 ``g1_29dof.urdf`` 路径。"""
     return ensure_g1_urdf()
