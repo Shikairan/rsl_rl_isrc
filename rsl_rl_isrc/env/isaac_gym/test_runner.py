@@ -24,6 +24,7 @@ class G1OnPolicyTestRunner(OnPolicyRunner):
         train_cfg,
         log_dir=None,
         device="cpu",
+        checkpoint_dir=None,
         *,
         enable_obs_server: bool = True,
         obs_pull_port: Optional[int] = None,
@@ -31,7 +32,13 @@ class G1OnPolicyTestRunner(OnPolicyRunner):
         obs_server_host: str = "localhost",
         print_obs: bool = False,
     ):
-        super().__init__(env=env, train_cfg=train_cfg, log_dir=log_dir, device=device)
+        super().__init__(
+            env=env,
+            train_cfg=train_cfg,
+            log_dir=log_dir,
+            device=device,
+            checkpoint_dir=checkpoint_dir,
+        )
 
         self.obs_server: Optional[ObsInstrServer] = None
         if enable_obs_server:

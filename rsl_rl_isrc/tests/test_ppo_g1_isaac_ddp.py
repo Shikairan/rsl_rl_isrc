@@ -118,6 +118,8 @@ def run_g1_isaac_training(
     load_run: str | int,
     checkpoint: int,
     log_root: str | None,
+    checkpoint_root: str | None,
+    checkpoint_dir: str | None,
     enable_obs_server: bool,
     obs_pull_port: int,
     ctrl_rep_port: int,
@@ -130,12 +132,14 @@ def run_g1_isaac_training(
     _check_isaac_cuda(local_rank=int(device.split(":")[-1]))
 
     from rsl_rl_isrc.env.isaac_gym.make_g1_isaac import (
-        default_g1_log_dir,
+        default_g1_run_dirs,
         make_g1_isaac_env,
     )
     from rsl_rl_isrc.env.isaac_gym.test_runner import G1OnPolicyTestRunner
-    from rsl_rl_isrc.env.isaac_gym.legged.utils.helpers import get_load_path, set_seed
+    from rsl_rl_isrc.env.isaac_gym.legged.utils.helpers import set_seed
+    from rsl_rl_isrc.utils.checkpoint import get_load_path
     from rsl_rl_isrc.utils.distributed import broadcast_log_dir
+    from rsl_rl_isrc.utils.paths import checkpoint_root_default
 
     env, cfg, train_cfg = make_g1_isaac_env(
         num_envs=num_envs,
@@ -150,13 +154,27 @@ def run_g1_isaac_training(
     set_seed(int(seed) + int(rank))
 
     if log_dir is None and rank == 0:
-        log_dir = default_g1_log_dir(train_cfg, log_root=log_root)
+        log_dir, checkpoint_dir = default_g1_run_dirs(
+            train_cfg,
+            log_root=log_root,
+            checkpoint_root=checkpoint_root,
+        )
+    elif rank == 0 and checkpoint_dir is None and log_dir is not None:
+        from rsl_rl_isrc.env.isaac_gym.make_g1_isaac import default_g1_checkpoint_dir
+
+        checkpoint_dir = default_g1_checkpoint_dir(
+            train_cfg,
+            checkpoint_root=checkpoint_root,
+            run_suffix_value=os.path.basename(log_dir),
+        )
     log_dir = broadcast_log_dir(log_dir, rank=rank)
+    checkpoint_dir = broadcast_log_dir(checkpoint_dir, rank=rank)
 
     runner = G1OnPolicyTestRunner(
         env=env,
         train_cfg=train_cfg,
         log_dir=log_dir,
+        checkpoint_dir=checkpoint_dir,
         device=device,
         enable_obs_server=enable_obs_server,
         obs_pull_port=obs_pull_port,
@@ -178,16 +196,13 @@ def run_g1_isaac_training(
             )
 
     if resume and rank == 0:
-        import rsl_rl_isrc.env.isaac_gym.make_g1_isaac as _mig
-
-        if log_root is not None:
-            root = log_root
-        elif log_dir is not None:
-            root = os.path.dirname(log_dir)
+        if checkpoint_root is not None:
+            root = os.path.join(checkpoint_root, train_cfg["runner"]["experiment_name"])
+        elif checkpoint_dir is not None:
+            root = os.path.dirname(checkpoint_dir)
         else:
             root = os.path.join(
-                os.path.dirname(_mig.__file__),
-                "logs",
+                checkpoint_root_default(),
                 train_cfg["runner"]["experiment_name"],
             )
         resume_path = get_load_path(root, load_run=load_run, checkpoint=checkpoint)
@@ -197,7 +212,7 @@ def run_g1_isaac_training(
     if rank == 0:
         print(
             f"[rank0] 开始训练: num_envs/rank={num_envs}, max_iterations={max_iterations}, "
-            f"log_dir={log_dir}, device={device}"
+            f"log_dir={log_dir}, checkpoint_dir={checkpoint_dir}, device={device}"
         )
     runner.learn(max_iterations, init_at_random_ep_len=init_at_random_ep_len)
 
@@ -209,6 +224,8 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--max-iterations", type=int, default=10000)
     parser.add_argument("--log-dir", type=str, default=None)
     parser.add_argument("--log-root", type=str, default=None)
+    parser.add_argument("--checkpoint-root", type=str, default=None)
+    parser.add_argument("--checkpoint-dir", type=str, default=None)
     parser.add_argument("--headless", dest="headless", action="store_true", default=True)
     parser.add_argument("--no-headless", dest="headless", action="store_false")
     parser.add_argument("--no-random-init-ep-len", action="store_true")
@@ -266,6 +283,8 @@ def main() -> None:
             load_run=load_run,
             checkpoint=args.checkpoint,
             log_root=args.log_root,
+            checkpoint_root=args.checkpoint_root,
+            checkpoint_dir=args.checkpoint_dir,
             enable_obs_server=not args.no_zmq_obs,
             obs_pull_port=args.obs_pull_port,
             ctrl_rep_port=args.ctrl_rep_port,

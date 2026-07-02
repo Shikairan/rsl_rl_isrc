@@ -31,7 +31,8 @@ class OnPolicyRunner:
                  env: VecEnv,
                  train_cfg,
                  log_dir=None,
-                 device='cpu'):
+                 device='cpu',
+                 checkpoint_dir=None):
         self.cfg=train_cfg["runner"]
         self.task = self.cfg["experiment_name"]
         self.alg_cfg = train_cfg["algorithm"]
@@ -76,6 +77,14 @@ class OnPolicyRunner:
         self.alg.init_storage(self.env.num_envs, self.num_steps_per_env, [self.env.num_obs], [self.env.num_privileged_obs], [self.env.num_actions])
         # Log
         self.log_dir = log_dir
+        if checkpoint_dir is None and log_dir is not None:
+            from rsl_rl_isrc.utils.paths import build_run_checkpoint_dir
+
+            checkpoint_dir = build_run_checkpoint_dir(
+                train_cfg,
+                run_suffix_value=os.path.basename(log_dir.rstrip(os.sep)),
+            )
+        self.checkpoint_dir = checkpoint_dir if checkpoint_dir is not None else log_dir
         self.writer = None
         self.tot_timesteps = 0
         self.tot_time = 0
@@ -181,12 +190,12 @@ class OnPolicyRunner:
             if self.log_dir is not None and (not dist.is_initialized() or dist.get_rank() == 0):
                 self.log(locals())
             if it % self.save_interval == 0 and (not dist.is_initialized() or dist.get_rank() == 0):
-                self.save(os.path.join(self.log_dir, 'model_{}.pt'.format(it)))
+                self.save(os.path.join(self.checkpoint_dir, 'model_{}.pt'.format(it)))
             ep_infos.clear()
         
         self.current_learning_iteration += num_learning_iterations
         if not dist.is_initialized() or dist.get_rank() == 0:
-            self.save(os.path.join(self.log_dir, 'model_{}.pt'.format(self.current_learning_iteration)))
+            self.save(os.path.join(self.checkpoint_dir, 'model_{}.pt'.format(self.current_learning_iteration)))
 
     def log(self, locs, width=80, pad=35):
         """将本轮 ``locs`` 中的损失、FPS、回合统计写入 TensorBoard 并打印文本摘要（仅 rank0 调用）。"""

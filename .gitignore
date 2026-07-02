@@ -10,3 +10,9 @@ __pycache__
 
 # vs code
 .vscode
+
+# training artifacts (legacy under env/ + local runs)
+rsl_rl_isrc/env/**/logs/
+**/events.out.tfevents.*
+**/model_*.pt
+logs/

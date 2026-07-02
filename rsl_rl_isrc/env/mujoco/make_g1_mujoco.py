@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import os
 import sys
-from datetime import datetime
 from typing import Tuple, TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -35,15 +34,33 @@ def build_g1_ppo_train_cfg() -> dict:
 
 
 def default_g1_mujoco_log_dir(train_cfg: dict, log_root: str | None = None) -> str:
-    if log_root is None:
-        log_root = os.path.join(
-            os.path.dirname(os.path.abspath(__file__)),
-            "logs",
-            train_cfg["runner"]["experiment_name"],
-        )
-    run_name = train_cfg["runner"].get("run_name", "")
-    stamp = datetime.now().strftime("%b%d_%H-%M-%S")
-    return os.path.join(log_root, f"{stamp}_{run_name}")
+    from rsl_rl_isrc.utils.paths import build_run_log_dir
+
+    return build_run_log_dir(train_cfg, log_root=log_root)
+
+
+def default_g1_mujoco_checkpoint_dir(
+    train_cfg: dict,
+    checkpoint_root: str | None = None,
+    run_suffix_value: str | None = None,
+) -> str:
+    from rsl_rl_isrc.utils.paths import build_run_checkpoint_dir
+
+    return build_run_checkpoint_dir(
+        train_cfg,
+        checkpoint_root=checkpoint_root,
+        run_suffix_value=run_suffix_value,
+    )
+
+
+def default_g1_mujoco_run_dirs(
+    train_cfg: dict,
+    log_root: str | None = None,
+    checkpoint_root: str | None = None,
+) -> tuple[str, str]:
+    from rsl_rl_isrc.utils.paths import build_run_dirs
+
+    return build_run_dirs(train_cfg, log_root=log_root, checkpoint_root=checkpoint_root)
 
 
 def make_g1_mujoco_env(

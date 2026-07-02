@@ -42,6 +42,8 @@ def run_g1_mujoco_training(
     device: str = "cuda:0",
     init_at_random_ep_len: bool = True,
     log_root: str | None = None,
+    checkpoint_root: str | None = None,
+    checkpoint_dir: str | None = None,
     enable_obs_server: bool = True,
     obs_pull_port: int = 15555,
     ctrl_rep_port: int = 15556,
@@ -49,7 +51,7 @@ def run_g1_mujoco_training(
 ) -> None:
     from rsl_rl_isrc.env.isaac_gym.test_runner import G1OnPolicyTestRunner
     from rsl_rl_isrc.env.mujoco.make_g1_mujoco import (
-        default_g1_mujoco_log_dir,
+        default_g1_mujoco_run_dirs,
         has_mujoco,
         make_g1_mujoco_env,
         mujoco_import_error,
@@ -67,12 +69,25 @@ def run_g1_mujoco_training(
     train_cfg["runner"]["max_iterations"] = max_iterations
 
     if log_dir is None:
-        log_dir = default_g1_mujoco_log_dir(train_cfg, log_root=log_root)
+        log_dir, checkpoint_dir = default_g1_mujoco_run_dirs(
+            train_cfg,
+            log_root=log_root,
+            checkpoint_root=checkpoint_root,
+        )
+    elif checkpoint_dir is None:
+        from rsl_rl_isrc.env.mujoco.make_g1_mujoco import default_g1_mujoco_checkpoint_dir
+
+        checkpoint_dir = default_g1_mujoco_checkpoint_dir(
+            train_cfg,
+            checkpoint_root=checkpoint_root,
+            run_suffix_value=os.path.basename(log_dir),
+        )
 
     runner = G1OnPolicyTestRunner(
         env=env,
         train_cfg=train_cfg,
         log_dir=log_dir,
+        checkpoint_dir=checkpoint_dir,
         device=policy_device,
         enable_obs_server=enable_obs_server,
         obs_pull_port=obs_pull_port,
@@ -89,7 +104,8 @@ def run_g1_mujoco_training(
 
     print(
         f"开始训练: num_envs={num_envs}, max_iterations={max_iterations}, "
-        f"sim_device={sim_device}, policy_device={policy_device}, log_dir={log_dir}"
+        f"sim_device={sim_device}, policy_device={policy_device}, "
+        f"log_dir={log_dir}, checkpoint_dir={checkpoint_dir}"
     )
     runner.learn(max_iterations, init_at_random_ep_len=init_at_random_ep_len)
 
@@ -101,6 +117,8 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--max-iterations", type=int, default=10000)
     parser.add_argument("--log-dir", type=str, default=None)
     parser.add_argument("--log-root", type=str, default=None)
+    parser.add_argument("--checkpoint-root", type=str, default=None)
+    parser.add_argument("--checkpoint-dir", type=str, default=None)
     parser.add_argument(
         "--sim-device",
         type=str,
@@ -147,6 +165,8 @@ def main() -> None:
         device=args.device,
         init_at_random_ep_len=not args.no_random_init_ep_len,
         log_root=args.log_root,
+        checkpoint_root=args.checkpoint_root,
+        checkpoint_dir=args.checkpoint_dir,
         enable_obs_server=not args.no_zmq_obs,
         obs_pull_port=args.obs_pull_port,
         ctrl_rep_port=args.ctrl_rep_port,

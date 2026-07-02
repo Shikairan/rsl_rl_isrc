@@ -82,6 +82,8 @@ def run_g1_isaac_training(
     load_run: str | int = -1,
     checkpoint: int = -1,
     log_root: str | None = None,
+    checkpoint_root: str | None = None,
+    checkpoint_dir: str | None = None,
     enable_obs_server: bool = True,
     obs_pull_port: int = 15555,
     ctrl_rep_port: int = 15556,
@@ -91,10 +93,13 @@ def run_g1_isaac_training(
     _check_isaac_cuda()
 
     from rsl_rl_isrc.env.isaac_gym.make_g1_isaac import (
-        default_g1_log_dir,
+        default_g1_run_dirs,
+        default_g1_checkpoint_dir,
         make_g1_isaac_env,
     )
     from rsl_rl_isrc.env.isaac_gym.test_runner import G1OnPolicyTestRunner
+    from rsl_rl_isrc.utils.checkpoint import get_load_path
+    from rsl_rl_isrc.utils.paths import checkpoint_root_default
 
     env, _, train_cfg = make_g1_isaac_env(
         num_envs=num_envs,
@@ -108,12 +113,23 @@ def run_g1_isaac_training(
     train_cfg["runner"]["checkpoint"] = checkpoint
 
     if log_dir is None:
-        log_dir = default_g1_log_dir(train_cfg, log_root=log_root)
+        log_dir, checkpoint_dir = default_g1_run_dirs(
+            train_cfg,
+            log_root=log_root,
+            checkpoint_root=checkpoint_root,
+        )
+    elif checkpoint_dir is None:
+        checkpoint_dir = default_g1_checkpoint_dir(
+            train_cfg,
+            checkpoint_root=checkpoint_root,
+            run_suffix_value=os.path.basename(log_dir),
+        )
 
     runner = G1OnPolicyTestRunner(
         env=env,
         train_cfg=train_cfg,
         log_dir=log_dir,
+        checkpoint_dir=checkpoint_dir,
         device=device,
         enable_obs_server=enable_obs_server,
         obs_pull_port=obs_pull_port,
@@ -130,17 +146,13 @@ def run_g1_isaac_training(
         )
 
     if resume:
-        import rsl_rl_isrc.env.isaac_gym.make_g1_isaac as _mig
-        from rsl_rl_isrc.env.isaac_gym.legged.utils.helpers import get_load_path
-
-        if log_root is not None:
-            root = log_root
-        elif log_dir is not None:
-            root = os.path.dirname(log_dir)
+        if checkpoint_root is not None:
+            root = os.path.join(checkpoint_root, train_cfg["runner"]["experiment_name"])
+        elif checkpoint_dir is not None:
+            root = os.path.dirname(checkpoint_dir)
         else:
             root = os.path.join(
-                os.path.dirname(_mig.__file__),
-                "logs",
+                checkpoint_root_default(),
                 train_cfg["runner"]["experiment_name"],
             )
         resume_path = get_load_path(
@@ -153,7 +165,7 @@ def run_g1_isaac_training(
 
     print(
         f"开始训练: num_envs={num_envs}, max_iterations={max_iterations}, "
-        f"log_dir={log_dir}, device={device}"
+        f"log_dir={log_dir}, checkpoint_dir={checkpoint_dir}, device={device}"
     )
     runner.learn(max_iterations, init_at_random_ep_len=init_at_random_ep_len)
 
@@ -179,13 +191,25 @@ def _parse_args() -> argparse.Namespace:
         "--log-dir",
         type=str,
         default=None,
-        help="TensorBoard / checkpoint 目录；默认 logs/g1/<timestamp>_<run_name>",
+        help="TensorBoard 事件目录；默认 /var/log/rsl_rl_isrc/<experiment>/<run>",
     )
     parser.add_argument(
         "--log-root",
         type=str,
         default=None,
-        help="日志根目录（仅当未指定 --log-dir 时使用）",
+        help="TensorBoard 根目录（默认 /var/log/rsl_rl_isrc）",
+    )
+    parser.add_argument(
+        "--checkpoint-root",
+        type=str,
+        default=None,
+        help="模型 checkpoint 根目录（默认 /tmp/rsl_rl_isrc_checkpoints）",
+    )
+    parser.add_argument(
+        "--checkpoint-dir",
+        type=str,
+        default=None,
+        help="模型 checkpoint 目录（默认与 log run 同名后缀）",
     )
     parser.add_argument("--device", type=str, default="cuda:0")
     parser.add_argument(
@@ -264,6 +288,8 @@ def main() -> None:
         load_run=load_run,
         checkpoint=args.checkpoint,
         log_root=args.log_root,
+        checkpoint_root=args.checkpoint_root,
+        checkpoint_dir=args.checkpoint_dir,
         enable_obs_server=not args.no_zmq_obs,
         obs_pull_port=args.obs_pull_port,
         ctrl_rep_port=args.ctrl_rep_port,
