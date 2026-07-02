@@ -3,7 +3,9 @@
 __all__ = [
     "IsaacG1VecEnv",
     "make_g1_isaac_env",
+    "make_humanoid_isaac_env",
     "build_g1_ppo_train_cfg",
+    "build_humanoid_cfg",
     "G1OnPolicyTestRunner",
     "has_isaac_gym",
 ]
@@ -15,12 +17,19 @@ def __getattr__(name: str):
         return IsaacG1VecEnv
     if name in (
         "make_g1_isaac_env",
-        "build_g1_ppo_train_cfg",
-        "normalize_train_cfg",
-        "default_g1_log_dir",
-        "has_isaac_gym",
-    ):
+            "build_g1_ppo_train_cfg",
+            "normalize_train_cfg",
+            "default_g1_log_dir",
+            "has_isaac_gym",
+        ):
         from rsl_rl_isrc.env.isaac_gym import make_g1_isaac as _m
+        return getattr(_m, name)
+    if name in (
+        "make_humanoid_isaac_env",
+        "build_humanoid_cfg",
+        "default_humanoid_log_dir",
+    ):
+        from rsl_rl_isrc.env.isaac_gym import make_humanoid_isaac as _m
         return getattr(_m, name)
     if name == "G1OnPolicyTestRunner":
         from rsl_rl_isrc.env.isaac_gym.test_runner import G1OnPolicyTestRunner

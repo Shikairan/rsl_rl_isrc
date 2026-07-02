@@ -46,6 +46,14 @@ class G1Robot(LeggedRobot):
         self._init_foot()
         # 位置奖励参考原点（相对各 env 出生点）
         self.location_O = self.env_origins[:, :2].clone()
+        hip_names = ("hip_yaw", "hip_roll")
+        hip_indices = [
+            i for i, name in enumerate(self.dof_names)
+            if any(part in name for part in hip_names)
+        ]
+        self.hip_reward_indices = torch.tensor(
+            hip_indices, dtype=torch.long, device=self.device
+        )
 
     def reset_idx(self, env_ids):
         super().reset_idx(env_ids)
@@ -111,7 +119,12 @@ class G1Robot(LeggedRobot):
     
     def _reward_feet_swing_height(self):
         contact = torch.norm(self.contact_forces[:, self.feet_indices, :3], dim=2) > 1.
-        pos_error = torch.square(self.feet_pos[:, :, 2] - 0.1) * ~contact
+        terrain_height = self._terrain_height_at_xy(
+            self.feet_pos[:, :, 0],
+            self.feet_pos[:, :, 1],
+        )
+        feet_height = self.feet_pos[:, :, 2] - terrain_height
+        pos_error = torch.square(feet_height - 0.1) * ~contact
         return torch.sum(pos_error, dim=(1))
     
     def _reward_alive(self):
@@ -126,7 +139,21 @@ class G1Robot(LeggedRobot):
         return torch.sum(penalize, dim=(1,2))
     
     def _reward_hip_pos(self):
-        return torch.sum(torch.square(self.dof_pos[:,[1,2,7,8]]), dim=1)
+        if self.hip_reward_indices.numel() == 0:
+            return torch.zeros(self.num_envs, dtype=torch.float, device=self.device)
+        return torch.sum(torch.square(self.dof_pos[:, self.hip_reward_indices]), dim=1)
+
+    def _reward_stability(self):
+        orientation_error = torch.sum(torch.square(self.projected_gravity[:, :2]), dim=1)
+        terrain_height = self._terrain_height_at_xy(
+            self.root_states[:, 0],
+            self.root_states[:, 1],
+        )
+        base_height = self.root_states[:, 2] - terrain_height
+        height_error = torch.square(
+            base_height - self.cfg.rewards.base_height_target
+        )
+        return torch.exp(-(4.0 * orientation_error + 20.0 * height_error))
 
     def _reward_velx(self):
         vel_vec = self.base_lin_vel[:, :2]

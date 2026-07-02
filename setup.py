@@ -32,6 +32,9 @@ setup(
             "tqdm>=4.60",
             "gymnasium>=0.28.0",
         ],
+        "mujoco": [
+            "mujoco>=3.1.0",
+        ],
     },
     keywords="reinforcement learning, pytorch, ppo, trpo, sac, rsl_rl",
 )
